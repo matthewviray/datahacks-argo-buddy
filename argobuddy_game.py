@@ -3,9 +3,12 @@
 ArgoBuddy – gamified ocean exploration app for middle schoolers.
 Run: python3 argobuddy_game.py  →  http://localhost:5050
 """
-from flask import Flask
+from flask import Flask, jsonify, request
 import pandas as pd
+import numpy as np
+from scipy import stats as _stats
 import json, os
+from datetime import datetime
 
 app = Flask(__name__, static_folder=None)
 _CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'single_argo.csv')
@@ -19,6 +22,7 @@ ZONES = {
         'sal_baseline':33.359,'sal_tolerance':0.143,
         'tipping_point':19.5,
         'pct_warm':34.2,'pct_cold':18.1,'pct_happy':47.7,
+        'temp_std':2.900,
         'depth':'0 – 200m','accent':'#ff9f1c',
         'residents':'🪸 Coral  🐠 Tropical fish  🐢 Sea turtles  🐬 Dolphins',
         'story':'🌡️ Crisis Zone — Climate change hits here first and hardest!',
@@ -40,6 +44,7 @@ ZONES = {
         'sal_baseline':34.122,'sal_tolerance':0.084,
         'tipping_point':10.3,
         'pct_warm':28.5,'pct_cold':22.3,'pct_happy':49.2,
+        'temp_std':1.405,
         'depth':'200 – 1000m','accent':'#c77dff',
         'residents':'💡 Bioluminescent creatures  🦑 Squid  🐟 Lanternfish  🪼 Jellyfish',
         'story':'⚠️ Warning Zone — Heat getting here means BIG trouble!',
@@ -61,6 +66,7 @@ ZONES = {
         'sal_baseline':34.547,'sal_tolerance':0.023,
         'tipping_point':4.4,
         'pct_warm':15.2,'pct_cold':31.8,'pct_happy':53.0,
+        'temp_std':0.570,
         'depth':'1000 – 2000m','accent':'#4cc9f0',
         'residents':'🦐 Deep sea shrimp  🐙 Giant squid  🐟 Anglerfish  🦠 Extremophiles',
         'story':'🕰️ Memory Zone — Warming here takes CENTURIES to undo!',
@@ -234,6 +240,156 @@ def get_ts_data():
 
 def safe_json(obj):
     return json.dumps(obj).replace('</script>', r'<\/script>')
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LIVE STATE  (shared between student ↔ teacher in real-time)
+# ══════════════════════════════════════════════════════════════════════════════
+_live = {
+    'zone': 'sunlight', 'depth': 50,
+    'temperature': 12.2, 'salinity': 33.359,
+    'mood': 'happy', 'anomaly_t': 0.0, 'anomaly_s': 0.0,
+    'p_value': 1.0, 'significant': False,
+    'health': 100.0, 'battery': 100.0,
+    'discoveries': [],
+    'ts': datetime.now().isoformat(),
+}
+
+# NGSS standard map (keyed by zone_mood)
+_NGSS = {
+    'sunlight_warm': {'code':'MS-ESS3-5','desc':'Factors causing rise in global temperatures',
+                      'alert':'Coral Bleaching Risk'},
+    'sunlight_cold': {'code':'MS-LS2-4', 'desc':'Disruptions to ecosystem functioning',
+                      'alert':'Cold Upwelling Detected'},
+    'twilight_warm': {'code':'MS-ESS2-6','desc':'Ocean circulation and climate connections',
+                      'alert':'Oxygen Minimum Expanding'},
+    'twilight_cold': {'code':'MS-LS2-1', 'desc':'Food web dynamics and matter cycling',
+                      'alert':'Thermocline Sharpening'},
+    'midnight_warm': {'code':'ESS2.D',   'desc':'Weather and climate — long-term ocean cycles',
+                      'alert':'Century-Scale Climate Signal'},
+    'midnight_cold': {'code':'ESS2.C',   'desc':'Ocean circulation and its role in climate',
+                      'alert':'Deep Water Formation — Normal'},
+}
+
+# ── Backend helpers ───────────────────────────────────────────────────────────
+def _p_for_temp(temp, zone_key):
+    z  = ZONES[zone_key]
+    se = z['temp_std'] / np.sqrt(30)
+    zs = abs(temp - z['baseline']) / se
+    return float(2 * (1 - _stats.norm.cdf(zs)))
+
+def _compute_loo(n_per_zone=30):
+    df = get_df()
+    if df is None or not len(df):
+        return []
+    rows = []
+    for zk in ('sunlight','twilight','midnight'):
+        zdf   = df[df['zone'] == zk]
+        tc    = 'temperature (degree_celsius)'
+        g_sum = zdf[tc].sum()
+        g_n   = len(zdf)
+        for cyc, grp in list(zdf.groupby('meta_cycle_number'))[:n_per_zone]:
+            temps = grp[tc].dropna()
+            if len(temps) < 2:
+                continue
+            loo_b = (g_sum - temps.sum()) / (g_n - len(temps))
+            anom  = float(temps.mean() - loo_b)
+            _, p  = _stats.ttest_1samp(temps, loo_b)
+            rows.append({
+                'zone': zk, 'cycle': int(cyc),
+                'loo_baseline': round(float(loo_b), 3),
+                'mean_temp':    round(float(temps.mean()), 3),
+                'anomaly':      round(anom, 3),
+                'p_value':      round(float(p), 4),
+                'significant':  bool(p < 0.05),
+            })
+    return rows
+
+# Pre-compute LOO at startup (cached)
+_loo_cache = _compute_loo()
+
+# ── New API routes ────────────────────────────────────────────────────────────
+@app.route('/api/live', methods=['POST'])
+def api_live():
+    """Student page calls this on every slider change."""
+    d    = request.get_json(force=True) or {}
+    zone = d.get('zone', _live['zone'])
+    temp = float(d.get('temperature', _live['temperature']))
+    sal  = float(d.get('salinity',    _live['salinity']))
+    dep  = int(d.get('depth',         _live['depth']))
+
+    z         = ZONES.get(zone, ZONES['sunlight'])
+    anom_t    = round(temp - z['baseline'], 3)
+    anom_s    = round(sal  - z['sal_baseline'], 4)
+    bad_t     = abs(anom_t) > z['tolerance']
+    bad_s     = abs(anom_s) > z['sal_tolerance']
+    stressed  = bad_t or bad_s
+    mood      = ('warm' if anom_t >= 0 else 'cold') if stressed else 'happy'
+    p_val     = round(_p_for_temp(temp, zone), 4)
+    sig       = p_val < 0.05
+
+    # Health update
+    if stressed:
+        _live['health'] = max(0.0, _live['health'] - 10.0)
+    else:
+        _live['health'] = min(100.0, _live['health'] + 2.0)
+
+    # Battery drains on zone change
+    if zone != _live['zone']:
+        _live['battery'] = max(0.0, _live['battery'] - 15.0)
+
+    # Discovery logging
+    if sig and mood != 'happy':
+        key   = f'{zone}_{mood}'
+        ngss  = _NGSS.get(key, {})
+        entry = {
+            'time': datetime.now().strftime('%H:%M:%S'),
+            'zone': zone, 'temp': round(temp, 2), 'sal': round(sal, 3),
+            'anomaly_t': round(anom_t, 3), 'p_value': p_val, 'mood': mood,
+            'ngss_code':  ngss.get('code', ''),
+            'ngss_desc':  ngss.get('desc', ''),
+            'alert':      ngss.get('alert', ''),
+        }
+        last = _live['discoveries'][-1] if _live['discoveries'] else None
+        if not last or last['zone'] != zone or abs(last['temp'] - temp) > 0.3:
+            _live['discoveries'].append(entry)
+
+    _live.update({
+        'zone': zone, 'depth': dep,
+        'temperature': round(temp, 2), 'salinity': round(sal, 3),
+        'mood': mood, 'anomaly_t': anom_t, 'anomaly_s': anom_s,
+        'p_value': p_val, 'significant': sig,
+        'ts': datetime.now().isoformat(),
+    })
+    return jsonify({'ok': True, 'mood': mood, 'p_value': p_val, 'significant': sig,
+                    'health': _live['health'], 'battery': _live['battery']})
+
+@app.route('/api/state')
+def api_state():
+    """Teacher page polls this every 1.5 s."""
+    return jsonify(_live)
+
+@app.route('/api/loo')
+def api_loo():
+    return jsonify(_loo_cache)
+
+@app.route('/api/reset', methods=['POST'])
+def api_reset():
+    _live['health']      = 100.0
+    _live['battery']     = 100.0
+    _live['discoveries'] = []
+    return jsonify({'ok': True})
+
+# ── Teacher route ─────────────────────────────────────────────────────────────
+@app.route('/teacher')
+def teacher():
+    ts_data  = get_ts_data()
+    z_config = {zk: {k: v for k, v in zv.items()
+                     if k not in ('story','desc','actions','residents','emoji')}
+                for zk, zv in ZONES.items()}
+    return (PAGE_TEACHER
+            .replace('__TS_DATA__',  safe_json(ts_data))
+            .replace('__ZONES__',    safe_json(z_config))
+            .replace('__LOO__',      safe_json(_loo_cache)))
 
 @app.route('/')
 def index():
@@ -1036,8 +1192,22 @@ function refreshZone(){
   buildCharts(zk,temp);
   updateTSPoint(temp,sal);
 }
-function onTC(){ refreshZone(); }
-function onSC(){ refreshZone(); }
+function onTC(){ refreshZone(); pushLiveState(); }
+function onSC(){ refreshZone(); pushLiveState(); }
+
+// ── Teacher bridge ────────────────────────────────────────────────────────────
+let _pushTimer=null;
+function pushLiveState(){
+  clearTimeout(_pushTimer);
+  _pushTimer=setTimeout(()=>{
+    const zk=G.cur;
+    const temp=parseFloat(document.getElementById('tslider').value)||G.zones[zk].temp;
+    const sal =parseFloat(document.getElementById('sslider').value)||G.zones[zk].sal;
+    fetch('/api/live',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({zone:zk,temperature:temp,salinity:sal,depth:G.zones[zk].depth||50})
+    }).catch(()=>{});
+  },180);
+}
 
 function buildCharts(zk,temp){
   const z=ZONES[zk],ac=z.accent;
@@ -1381,6 +1551,483 @@ document.addEventListener('DOMContentLoaded',()=>{
   }
 });
 </script>
+<!-- Teacher Mode pill (always visible, top-right) -->
+<a href="/teacher" target="_blank" style="
+  position:fixed;top:14px;right:14px;z-index:9999;
+  background:rgba(255,255,255,.11);backdrop-filter:blur(12px);
+  border:1.5px solid rgba(255,255,255,.22);border-radius:24px;
+  padding:.38rem 1rem;font-size:.75rem;font-weight:800;
+  color:rgba(255,255,255,.75);text-decoration:none;letter-spacing:.04em;
+  transition:background .2s,color .2s;white-space:nowrap;">
+  📊 Teacher Dashboard →
+</a>
+</body>
+</html>"""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TEACHER DASHBOARD PAGE
+# ══════════════════════════════════════════════════════════════════════════════
+PAGE_TEACHER = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ArgoBuddy — Teacher Command Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f4f8;color:#1a2332;min-height:100vh}
+
+/* ── Header ── */
+.dash-header{
+  background:linear-gradient(135deg,#1a2332 0%,#2c3e50 100%);
+  color:white;padding:.9rem 2rem;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:3px solid #00b4d8;box-shadow:0 2px 12px rgba(0,0,0,.25)
+}
+.dash-logo{font-size:1.15rem;font-weight:800;letter-spacing:-.01em}
+.dash-logo span{color:#00d4ff}
+.dash-meta{display:flex;align-items:center;gap:1.5rem;font-size:.8rem;color:rgba(255,255,255,.6)}
+.live-dot{width:9px;height:9px;border-radius:50%;background:#2ecc71;
+          animation:blink 1.4s ease-in-out infinite;display:inline-block;margin-right:.35rem}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+.btn-back{padding:.38rem 1rem;border-radius:20px;background:rgba(255,255,255,.12);
+          border:1.5px solid rgba(255,255,255,.22);color:rgba(255,255,255,.8);
+          font-size:.78rem;font-weight:700;text-decoration:none;
+          transition:background .2s;white-space:nowrap}
+.btn-back:hover{background:rgba(255,255,255,.2)}
+
+/* ── Zone indicator strip ── */
+.zone-strip{display:flex;gap:0;border-bottom:1px solid #dde3ea}
+.zone-pill{flex:1;padding:.5rem 1rem;text-align:center;font-size:.72rem;font-weight:800;
+           text-transform:uppercase;letter-spacing:.06em;cursor:default;
+           border-bottom:3px solid transparent;transition:all .2s;color:#6b7c93}
+.zone-pill.active-sunlight{border-color:#ff9f1c;color:#b8730a;background:#fffbf0}
+.zone-pill.active-twilight{border-color:#c77dff;color:#7b3fa3;background:#faf5ff}
+.zone-pill.active-midnight{border-color:#4cc9f0;color:#0d7fa3;background:#f0faff}
+
+/* ── Main grid ── */
+.dash-body{display:grid;grid-template-columns:300px 1fr 280px;gap:0;height:calc(100vh - 115px);overflow:hidden}
+
+/* ── Panel base ── */
+.panel{padding:1.1rem 1.2rem;overflow-y:auto;border-right:1px solid #dde3ea}
+.panel:last-child{border-right:none}
+.panel-title{font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.1em;
+             color:#8a99ab;margin-bottom:.75rem;padding-bottom:.4rem;
+             border-bottom:2px solid #e8ecf0}
+.panel-title span{float:right;font-size:.65rem;font-weight:600;color:#b0bec5;text-transform:none;letter-spacing:0}
+
+/* ── Evidence table (left panel) ── */
+.evidence-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.evidence-table th{font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
+                   color:#8a99ab;padding:.5rem .6rem;text-align:left;background:#f7f9fb;
+                   border-bottom:2px solid #e0e7ef}
+.evidence-table td{padding:.55rem .6rem;border-bottom:1px solid #eef1f5;vertical-align:middle}
+.evidence-table tr:hover td{background:#f7f9fb}
+.ev-val{font-weight:800;font-size:.95rem}
+.ev-base{font-size:.72rem;color:#8a99ab;margin-top:.1rem}
+.ev-delta{display:inline-block;padding:.1rem .45rem;border-radius:6px;
+          font-size:.72rem;font-weight:800;margin-top:.15rem}
+.ev-delta.pos{background:#fff0e6;color:#c0392b}
+.ev-delta.neg{background:#e8f4fd;color:#2980b9}
+.ev-delta.ok {background:#eafaf1;color:#27ae60}
+
+.stat-row{display:flex;justify-content:space-between;align-items:center;
+          padding:.6rem .8rem;background:white;border-radius:8px;
+          margin:.35rem 0;border:1px solid #eef1f5;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.stat-row .label{font-size:.72rem;font-weight:700;color:#6b7c93;text-transform:uppercase;letter-spacing:.04em}
+.stat-row .value{font-size:1rem;font-weight:800;color:#1a2332}
+
+.p-badge{display:inline-block;padding:.2rem .6rem;border-radius:6px;
+         font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
+.p-badge.proven{background:#d4efdf;color:#1e8449}
+.p-badge.inconc {background:#fdebd0;color:#a04000}
+
+.health-bar-wrap{margin:.5rem 0 .9rem}
+.hbar-label{display:flex;justify-content:space-between;font-size:.72rem;
+            font-weight:700;color:#6b7c93;margin-bottom:.25rem}
+.hbar-track{background:#e8ecf0;border-radius:6px;height:10px;overflow:hidden}
+.hbar-fill{height:100%;border-radius:6px;transition:width .6s ease}
+
+/* ── Center panel — T-S chart ── */
+.chart-panel{padding:1.1rem 1.4rem;overflow:hidden;display:flex;flex-direction:column;border-right:1px solid #dde3ea}
+.chart-container{flex:1;position:relative;min-height:0}
+.ts-legend{display:flex;gap:1rem;margin-top:.7rem;flex-wrap:wrap}
+.ts-leg-item{display:flex;align-items:center;gap:.35rem;font-size:.73rem;color:#6b7c93;font-weight:600}
+.ts-leg-dot{width:10px;height:10px;border-radius:50%}
+
+.chart-explain{background:#f7f9fb;border:1px solid #e0e7ef;border-radius:8px;
+               padding:.7rem .9rem;margin-top:.7rem;font-size:.77rem;
+               color:#4a5568;line-height:1.5}
+.chart-explain strong{color:#1a2332}
+
+/* ── Right panel — NGSS log ── */
+.disc-item{background:white;border:1px solid #e0e7ef;border-left:4px solid #27ae60;
+           border-radius:8px;padding:.7rem .9rem;margin:.4rem 0;font-size:.8rem;
+           box-shadow:0 1px 3px rgba(0,0,0,.04);animation:slideIn .3s ease}
+.disc-item.warm{border-left-color:#e74c3c}
+.disc-item.cold{border-left-color:#2980b9}
+@keyframes slideIn{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
+.disc-zone{font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#8a99ab}
+.disc-vals{font-weight:700;color:#1a2332;margin:.15rem 0}
+.disc-ngss{display:inline-block;padding:.1rem .45rem;background:#e8f4fd;
+           color:#1565c0;border-radius:5px;font-size:.65rem;font-weight:800;margin-top:.2rem}
+.disc-std{font-size:.7rem;color:#6b7c93;margin-top:.15rem}
+.disc-time{font-size:.65rem;color:#b0bec5;float:right}
+.empty-disc{text-align:center;padding:2.5rem 1rem;color:#b0bec5}
+.empty-disc .icon{font-size:2.5rem;margin-bottom:.5rem}
+
+/* ── LOO table at bottom ── */
+.loo-section{grid-column:1/-1;border-top:1px solid #dde3ea;
+             padding:.8rem 1.4rem;overflow-x:auto;background:white}
+.loo-section .panel-title{margin-bottom:.6rem}
+.loo-table{width:100%;border-collapse:collapse;font-size:.78rem}
+.loo-table th{font-size:.65rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
+              color:#8a99ab;padding:.45rem .7rem;text-align:left;background:#f7f9fb;
+              border-bottom:2px solid #e0e7ef;white-space:nowrap}
+.loo-table td{padding:.45rem .7rem;border-bottom:1px solid #eef1f5;vertical-align:middle}
+.loo-table tr:hover td{background:#f7f9fb}
+.sig-yes{background:#d4efdf;color:#1e8449;padding:.15rem .5rem;border-radius:5px;
+         font-size:.68rem;font-weight:800}
+.sig-no {background:#fdebd0;color:#a04000;padding:.15rem .5rem;border-radius:5px;
+         font-size:.68rem;font-weight:800}
+.ztag-s{background:#fff3cd;color:#856404;padding:.15rem .5rem;border-radius:5px;font-size:.68rem;font-weight:800}
+.ztag-t{background:#f3e5f5;color:#6a1b9a;padding:.15rem .5rem;border-radius:5px;font-size:.68rem;font-weight:800}
+.ztag-m{background:#e3f2fd;color:#0d47a1;padding:.15rem .5rem;border-radius:5px;font-size:.68rem;font-weight:800}
+
+.dash-body-grid{display:grid;grid-template-rows:1fr auto;height:calc(100vh - 115px)}
+.top-grid{display:grid;grid-template-columns:300px 1fr 280px;overflow:hidden}
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="dash-header">
+  <div>
+    <div class="dash-logo">ArgoBuddy <span>Command</span> — Teacher Dashboard</div>
+    <div style="font-size:.72rem;color:rgba(255,255,255,.45);margin-top:.15rem">
+      Real-time telemetry · Argo Float 4901639 · Pacific Ocean, Nov 2015 – Jan 2017
+    </div>
+  </div>
+  <div class="dash-meta">
+    <div><span class="live-dot"></span>Live Student Feed</div>
+    <div id="last-update" style="color:rgba(255,255,255,.35)">Waiting…</div>
+    <a href="/" target="_blank" class="btn-back">← Student View</a>
+    <button class="btn-back" onclick="resetSession()" style="border-color:rgba(231,76,60,.5);color:rgba(231,76,60,.8)">Reset Session</button>
+  </div>
+</div>
+
+<!-- Zone strip -->
+<div class="zone-strip">
+  <div class="zone-pill" id="zpill-sunlight">Sunlight Zone · 0–200 m · Baseline 12.2°C</div>
+  <div class="zone-pill" id="zpill-twilight">Twilight Zone · 200–1000 m · Baseline 6.8°C</div>
+  <div class="zone-pill" id="zpill-midnight">Midnight Zone · 1000–2000 m · Baseline 3.0°C</div>
+</div>
+
+<!-- Dashboard body -->
+<div class="dash-body-grid">
+  <div class="top-grid">
+
+    <!-- LEFT — Evidence Panel -->
+    <div class="panel">
+      <div class="panel-title">Evidence <span>Student Input vs 50-yr Historical Mean</span></div>
+
+      <!-- Key metrics -->
+      <div class="stat-row">
+        <div class="label">Current Zone</div>
+        <div class="value" id="ev-zone">—</div>
+      </div>
+      <div class="stat-row">
+        <div class="label">Depth</div>
+        <div class="value" id="ev-depth">—</div>
+      </div>
+      <div class="stat-row">
+        <div class="label">Mood / Status</div>
+        <div class="value" id="ev-mood">—</div>
+      </div>
+
+      <!-- Evidence table -->
+      <table class="evidence-table" style="margin-top:.6rem">
+        <thead>
+          <tr>
+            <th>Parameter</th><th>Student Input</th><th>Historical Mean</th><th>Delta</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="font-weight:700;color:#4a5568">Temperature</td>
+            <td><div class="ev-val" id="ev-temp">—</div></td>
+            <td><div class="ev-val" id="ev-tbase">—</div><div class="ev-base">zone baseline</div></td>
+            <td><div id="ev-tdelta"></div></td>
+          </tr>
+          <tr>
+            <td style="font-weight:700;color:#4a5568">Salinity</td>
+            <td><div class="ev-val" id="ev-sal">—</div></td>
+            <td><div class="ev-val" id="ev-sbase">—</div><div class="ev-base">PSU baseline</div></td>
+            <td><div id="ev-sdelta"></div></td>
+          </tr>
+          <tr>
+            <td style="font-weight:700;color:#4a5568">p-value</td>
+            <td colspan="2"><div class="ev-val" id="ev-pval">—</div></td>
+            <td><div id="ev-pbadge"></div></td>
+          </tr>
+          <tr>
+            <td style="font-weight:700;color:#4a5568">T-Anomaly</td>
+            <td colspan="3"><div class="ev-val" id="ev-tanom">—</div></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- Health / Battery -->
+      <div style="margin-top:1rem">
+        <div class="health-bar-wrap">
+          <div class="hbar-label"><span>Nori Health</span><span id="hb-val">100%</span></div>
+          <div class="hbar-track"><div class="hbar-fill" id="hbar" style="width:100%;background:linear-gradient(90deg,#e74c3c,#f39c12,#27ae60)"></div></div>
+        </div>
+        <div class="health-bar-wrap">
+          <div class="hbar-label"><span>Battery</span><span id="bb-val">100%</span></div>
+          <div class="hbar-track"><div class="hbar-fill" id="bbar" style="width:100%;background:linear-gradient(90deg,#2980b9,#2ecc71)"></div></div>
+        </div>
+      </div>
+
+      <!-- LOO formula callout -->
+      <div style="background:#f7f9fb;border:1px solid #e0e7ef;border-radius:8px;
+                  padding:.7rem .9rem;margin-top:.8rem;font-size:.74rem;color:#4a5568;line-height:1.55">
+        <strong style="color:#1a2332;display:block;margin-bottom:.25rem">LOO Baseline Formula</strong>
+        <code style="font-size:.7rem;color:#1565c0">
+          B_loo = (Σ_all − Σ_cycle) / (N_all − N_cycle)<br>
+          p = ttest_1samp(cycle_temps, B_loo)<br>
+          Significant if p &lt; 0.05
+        </code>
+      </div>
+    </div>
+
+    <!-- CENTER — T-S Diagram -->
+    <div class="chart-panel">
+      <div class="panel-title" style="border-bottom:2px solid #e8ecf0;padding-bottom:.4rem;margin-bottom:.6rem">
+        T–S Relationship Diagram
+        <span style="font-size:.65rem;color:#8a99ab">Temperature–Salinity water mass fingerprint</span>
+      </div>
+      <div class="chart-container">
+        <canvas id="ts-chart"></canvas>
+      </div>
+      <div class="ts-legend">
+        <div class="ts-leg-item"><div class="ts-leg-dot" style="background:rgba(255,159,28,.6)"></div>Sunlight Zone</div>
+        <div class="ts-leg-item"><div class="ts-leg-dot" style="background:rgba(199,125,255,.6)"></div>Twilight Zone</div>
+        <div class="ts-leg-item"><div class="ts-leg-dot" style="background:rgba(76,201,240,.6)"></div>Midnight Zone</div>
+        <div class="ts-leg-item"><div class="ts-leg-dot" style="background:#e74c3c;width:14px;height:14px"></div>Student Live</div>
+      </div>
+      <div class="chart-explain">
+        <strong>Reading this chart:</strong> Each dot is a real Argo measurement.
+        The three clusters show how temperature and salinity co-vary by depth zone —
+        a water mass "fingerprint." The <strong style="color:#e74c3c">★ red star</strong>
+        is the student's current slider position. When it moves outside its cluster,
+        the math triggers a statistically significant anomaly.
+      </div>
+    </div>
+
+    <!-- RIGHT — NGSS Discovery Log -->
+    <div class="panel">
+      <div class="panel-title">
+        NGSS Discovery Log
+        <span id="disc-count">0 discoveries</span>
+      </div>
+      <div id="disc-list">
+        <div class="empty-disc">
+          <div class="icon">🔬</div>
+          <div>No anomalies detected yet.<br>Have the student adjust the sliders beyond the tolerance band to trigger discoveries.</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /top-grid -->
+
+  <!-- BOTTOM — LOO Statistics table -->
+  <div class="loo-section">
+    <div class="panel-title">
+      Leave-One-Out Statistical Proof
+      <span>First 30 cycles × 3 zones — the engine behind the student game's Truth Meter</span>
+    </div>
+    <div style="overflow-x:auto;max-height:180px">
+      <table class="loo-table" id="loo-table">
+        <thead>
+          <tr>
+            <th>Zone</th><th>Cycle</th><th>LOO Baseline (°C)</th>
+            <th>Cycle Mean Temp (°C)</th><th>Anomaly (°C)</th>
+            <th>p-value</th><th>Significant (p&lt;0.05)</th>
+          </tr>
+        </thead>
+        <tbody id="loo-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /dash-body-grid -->
+
+<script>
+const TS_DATA  = __TS_DATA__;
+const ZONES_CF = __ZONES__;
+const LOO_DATA = __LOO__;
+
+// ── Build T-S chart ───────────────────────────────────────────────────────────
+const ctx = document.getElementById('ts-chart').getContext('2d');
+const tsChart = new Chart(ctx, {
+  type:'scatter',
+  data:{datasets:[
+    {label:'Sunlight',data:TS_DATA.sunlight||[],
+     backgroundColor:'rgba(255,159,28,.35)',pointRadius:2.5,borderWidth:0},
+    {label:'Twilight',data:TS_DATA.twilight||[],
+     backgroundColor:'rgba(199,125,255,.35)',pointRadius:2.5,borderWidth:0},
+    {label:'Midnight',data:TS_DATA.midnight||[],
+     backgroundColor:'rgba(76,201,240,.35)',pointRadius:2.5,borderWidth:0},
+    {label:'Student ★',data:[{x:33.36,y:12.2}],
+     backgroundColor:'#e74c3c',pointRadius:14,pointHoverRadius:16,
+     pointStyle:'star',borderColor:'white',borderWidth:1.5},
+  ]},
+  options:{
+    responsive:true,maintainAspectRatio:false,
+    animation:{duration:200},
+    plugins:{
+      legend:{display:false},
+      tooltip:{callbacks:{
+        label:c=>`${c.dataset.label}: T=${c.parsed.y.toFixed(2)}°C  S=${c.parsed.x.toFixed(3)} PSU`
+      }}
+    },
+    scales:{
+      x:{title:{display:true,text:'Salinity (PSU)',color:'#6b7c93',font:{size:11,weight:'600'}},
+         ticks:{color:'#8a99ab',font:{size:10}},
+         grid:{color:'rgba(0,0,0,.05)'}},
+      y:{title:{display:true,text:'Temperature (°C)',color:'#6b7c93',font:{size:11,weight:'600'}},
+         ticks:{color:'#8a99ab',font:{size:10}},
+         grid:{color:'rgba(0,0,0,.05)'}}
+    }
+  }
+});
+
+// ── Build LOO table ───────────────────────────────────────────────────────────
+(function(){
+  const zTags={sunlight:'ztag-s',twilight:'ztag-t',midnight:'ztag-m'};
+  const zLabels={sunlight:'Sunlight',twilight:'Twilight',midnight:'Midnight'};
+  const tbody=document.getElementById('loo-tbody');
+  LOO_DATA.forEach(r=>{
+    const tr=document.createElement('tr');
+    const sc=r.significant?'sig-yes':'sig-no';
+    const zt=zTags[r.zone]||'ztag-s';
+    const aSign=r.anomaly>=0?'+':'';
+    tr.innerHTML=
+      `<td><span class="${zt}">${zLabels[r.zone]}</span></td>`+
+      `<td style="color:#6b7c93">${r.cycle}</td>`+
+      `<td style="font-weight:700">${r.loo_baseline.toFixed(3)}</td>`+
+      `<td>${r.mean_temp.toFixed(3)}</td>`+
+      `<td style="color:${r.anomaly>0?'#c0392b':'#2980b9'};font-weight:700">${aSign}${r.anomaly.toFixed(3)}</td>`+
+      `<td style="font-family:monospace">${r.p_value.toFixed(4)}</td>`+
+      `<td><span class="${sc}">${r.significant?'YES — p<0.05':'No'}</span></td>`;
+    tbody.appendChild(tr);
+  });
+})();
+
+// ── Poll /api/state ───────────────────────────────────────────────────────────
+const ZONE_LABELS={sunlight:'Sunlight Zone',twilight:'Twilight Zone',midnight:'Midnight Zone'};
+const MOOD_LABELS={happy:'Nominal ✓',warm:'Overheating ⚠',cold:'Too Cold ⚠'};
+
+function formatDelta(val, cls){
+  const sign=val>=0?'+':'';
+  return `<span class="ev-delta ${cls}">${sign}${val.toFixed(3)}</span>`;
+}
+
+function updateDashboard(d){
+  // Zone pill
+  document.querySelectorAll('.zone-pill').forEach(p=>p.className='zone-pill');
+  const zp=document.getElementById('zpill-'+d.zone);
+  if(zp) zp.className=`zone-pill active-${d.zone}`;
+
+  // Evidence panel
+  const zc=ZONES_CF[d.zone]||{};
+  document.getElementById('ev-zone').textContent  = ZONE_LABELS[d.zone]||d.zone;
+  document.getElementById('ev-depth').textContent = `${d.depth} m`;
+  const moodEl=document.getElementById('ev-mood');
+  moodEl.textContent=MOOD_LABELS[d.mood]||d.mood;
+  moodEl.style.color=d.mood==='happy'?'#27ae60':(d.mood==='warm'?'#e74c3c':'#2980b9');
+
+  document.getElementById('ev-temp').textContent  = `${d.temperature}°C`;
+  document.getElementById('ev-tbase').textContent = `${(zc.baseline||0).toFixed(1)}°C`;
+  document.getElementById('ev-sal').textContent   = `${d.salinity} PSU`;
+  document.getElementById('ev-sbase').textContent = `${(zc.sal_baseline||0).toFixed(3)} PSU`;
+  document.getElementById('ev-pval').textContent  = d.p_value.toFixed(4);
+  document.getElementById('ev-tanom').textContent = `${d.anomaly_t>=0?'+':''}${d.anomaly_t.toFixed(3)}°C`;
+
+  const tCls = d.anomaly_t>0.1?'pos':(d.anomaly_t<-0.1?'neg':'ok');
+  const sCls = d.anomaly_s>0.01?'pos':(d.anomaly_s<-0.01?'neg':'ok');
+  document.getElementById('ev-tdelta').innerHTML = formatDelta(d.anomaly_t, tCls);
+  document.getElementById('ev-sdelta').innerHTML = formatDelta(d.anomaly_s, sCls);
+
+  const pHtml = d.significant
+    ? '<span class="p-badge proven">✓ Proved by Science</span>'
+    : '<span class="p-badge inconc">Inconclusive</span>';
+  document.getElementById('ev-pbadge').innerHTML = pHtml;
+
+  // Health / battery bars
+  const h=Math.max(0,Math.min(100,d.health));
+  const b=Math.max(0,Math.min(100,d.battery));
+  document.getElementById('hbar').style.width=h+'%';
+  document.getElementById('hb-val').textContent=h.toFixed(0)+'%';
+  document.getElementById('bbar').style.width=b+'%';
+  document.getElementById('bb-val').textContent=b.toFixed(0)+'%';
+
+  // T-S live point
+  tsChart.data.datasets[3].data=[{x:d.salinity, y:d.temperature}];
+  tsChart.update('none');
+
+  // Last update time
+  const ts=new Date(d.ts);
+  document.getElementById('last-update').textContent=
+    'Updated '+ts.toLocaleTimeString();
+
+  // Discovery log
+  renderDiscoveries(d.discoveries||[]);
+}
+
+function renderDiscoveries(list){
+  const el=document.getElementById('disc-list');
+  document.getElementById('disc-count').textContent=
+    list.length+' discover'+(list.length===1?'y':'ies');
+  if(!list.length){
+    el.innerHTML='<div class="empty-disc"><div class="icon">🔬</div><div>No anomalies detected yet.<br>Have the student adjust the sliders beyond the tolerance band.</div></div>';
+    return;
+  }
+  el.innerHTML=[...list].reverse().map(d=>{
+    const cls=d.mood==='warm'?'warm':'cold';
+    const aSign=d.anomaly_t>=0?'+':'';
+    return `<div class="disc-item ${cls}">
+      <div class="disc-time">${d.time}</div>
+      <div class="disc-zone">${ZONE_LABELS[d.zone]||d.zone} · ${d.mood.toUpperCase()}</div>
+      <div class="disc-vals">T=${d.temp}°C · S=${d.sal} PSU · Δ=${aSign}${d.anomaly_t}°C</div>
+      <div>p = <strong>${d.p_value.toFixed(4)}</strong>
+           <span style="color:${d.mood==='warm'?'#e74c3c':'#2980b9'};font-weight:800;font-size:.72rem;margin-left:.3rem">
+             ${d.mood==='warm'?'HEAT ANOMALY':'COLD ANOMALY'}</span></div>
+      ${d.ngss_code?`<div class="disc-ngss">${d.ngss_code}</div>
+        <div class="disc-std">${d.ngss_desc}</div>`:''}
+    </div>`;
+  }).join('');
+}
+
+async function poll(){
+  try{
+    const r=await fetch('/api/state');
+    const d=await r.json();
+    updateDashboard(d);
+  }catch(e){}
+}
+
+async function resetSession(){
+  await fetch('/api/reset',{method:'POST'});
+  poll();
+}
+
+// Initial render with server-side state, then poll
+poll();
+setInterval(poll, 1500);
+</script>
 </body>
 </html>"""
 
@@ -1390,5 +2037,6 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--port', type=int, default=5050)
     args = p.parse_args()
-    print(f'\n🌊  ArgoBuddy →  http://localhost:{args.port}\n')
-    app.run(debug=True, port=args.port)
+    print(f'\nArgoBuddy  -->  http://localhost:{args.port}')
+    print(f'Teacher   -->  http://localhost:{args.port}/teacher\n')
+    app.run(debug=True, port=args.port, use_reloader=False)
