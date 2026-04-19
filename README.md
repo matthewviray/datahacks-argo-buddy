@@ -2,7 +2,7 @@
 
 A gamified ocean science web app for students — powered by real data from Argo float **4901639** in the Pacific Ocean off Southern California.
 
-Students adopt an Argo robot named **Nori**, dive through three ocean zones, adjust temperature and salinity sliders, and watch in real time how changes in ocean conditions affect the ecosystem. Teachers get a dedicated dashboard with interactive data visualizations and NGSS-aligned lesson plans.
+Students adopt an Argo robot, dive through three ocean zones, adjust temperature and salinity sliders, and watch in real time how changes in ocean conditions affect the ecosystem. Teachers get a dedicated dashboard with interactive data visualizations and NGSS-aligned lesson plans.
 
 ---
 
