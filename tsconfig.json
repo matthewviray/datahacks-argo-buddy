@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": false,
+    "skipLibCheck": true,
+    "typeRoots": ["./app/tsx-runner/node_modules/@types"],
+    "paths": {
+      "react": ["./app/tsx-runner/node_modules/react"],
+      "react/jsx-runtime": ["./app/tsx-runner/node_modules/react/jsx-runtime"],
+      "react-dom": ["./app/tsx-runner/node_modules/react-dom"],
+      "lucide-react": ["./app/tsx-runner/node_modules/lucide-react"]
+    }
+  },
+  "include": ["app/argobuddy-app.tsx"]
+}
