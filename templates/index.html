@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ArgoBuddy 🤖🌊</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet" />
+  <!-- Plotly -->
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+
+  <style>
+    /* ── Shared ────────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: 'Nunito', sans-serif; margin: 0; transition: background 0.6s; }
+
+    #mode-bar {
+      position: sticky; top: 0; z-index: 999;
+      display: flex; align-items: center; justify-content: center; gap: 1rem;
+      padding: 0.55rem 1rem;
+      background: rgba(10,22,40,0.95);
+      backdrop-filter: blur(8px);
+      border-bottom: 2px solid rgba(255,255,255,0.08);
+    }
+    #mode-bar .brand { color: #87ceeb; font-weight: 900; font-size: 1.1rem; margin-right: auto; }
+    .mode-btn {
+      border: 2px solid rgba(255,255,255,0.25); border-radius: 30px;
+      padding: 0.35rem 1.2rem; font-weight: 700; font-size: 0.9rem;
+      background: transparent; color: rgba(255,255,255,0.65);
+      cursor: pointer; transition: all 0.2s;
+    }
+    .mode-btn.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+    .mode-btn:hover:not(.active) { border-color: #3b82f6; color: #fff; }
+
+    /* ── STUDENT MODE ──────────────────────────────────────────────────────── */
+    #student-mode {
+      min-height: 100vh;
+      background: linear-gradient(180deg, #0a4e8c 0%, #071e3d 55%, #000000 100%);
+      color: #fff;
+      padding: 1.5rem;
+      transition: background 0.6s;
+    }
+
+    .nori-card {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 20px;
+      padding: 1.4rem 1.6rem;
+      margin-bottom: 1rem;
+    }
+    .nori-card h5 { color: #87ceeb; margin: 0 0 0.8rem 0; font-weight: 800; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    /* Avatar */
+    #nori-avatar {
+      font-size: 7rem; line-height: 1;
+      filter: drop-shadow(0 0 30px rgba(135,206,235,0.4));
+      transition: transform 0.3s, filter 0.3s;
+      cursor: default; user-select: none;
+    }
+    #nori-avatar.pulse { animation: avatarPulse 0.5s ease-in-out; }
+    @keyframes avatarPulse {
+      0%   { transform: scale(1); }
+      50%  { transform: scale(1.18); }
+      100% { transform: scale(1); }
+    }
+    #nori-status { font-size: 1rem; font-weight: 700; margin-top: 0.4rem; }
+    #zone-badge {
+      display: inline-block; padding: 0.25rem 1rem; border-radius: 20px;
+      font-size: 0.82rem; font-weight: 800; margin-top: 0.5rem;
+      background: rgba(135,206,235,0.18); border: 1px solid rgba(135,206,235,0.4);
+      color: #87ceeb;
+    }
+
+    /* Sliders */
+    .slider-label { display: flex; justify-content: space-between; margin-bottom: 0.3rem; font-size: 0.88rem; }
+    .slider-label .val { font-weight: 800; color: #f0e040; }
+    input[type=range] { width: 100%; accent-color: #3b82f6; }
+
+    /* Depth gradient strip */
+    #depth-strip {
+      height: 10px; border-radius: 6px; margin-bottom: 0.3rem;
+      background: linear-gradient(90deg, #87CEEB, #001F5B, #000000);
+    }
+
+    /* Wellness bars */
+    .wellness-bar-wrap { margin-bottom: 0.7rem; }
+    .wellness-bar-header { display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 0.25rem; }
+    .wellness-track {
+      background: rgba(255,255,255,0.1); border-radius: 8px; height: 16px; overflow: hidden;
+    }
+    .wellness-fill {
+      height: 100%; border-radius: 8px;
+      transition: width 0.4s, background-color 0.4s;
+    }
+    .well-thermal { background: linear-gradient(90deg, #e74c3c, #f97316); }
+    .well-buoyancy { background: linear-gradient(90deg, #3b82f6, #06b6d4); }
+    .well-battery  { background: linear-gradient(90deg, #22c55e, #84cc16); }
+
+    /* Level-up overlay */
+    #levelup-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.75); z-index: 1200;
+      align-items: center; justify-content: center; flex-direction: column;
+    }
+    #levelup-overlay.show { display: flex; animation: fadeIn 0.4s; }
+    @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+    .levelup-card {
+      background: linear-gradient(135deg, #0a2540, #1a4a7a);
+      border: 3px solid #f0e040; border-radius: 24px;
+      padding: 2.5rem 3rem; text-align: center; max-width: 460px;
+      box-shadow: 0 0 60px rgba(240,224,64,0.35);
+    }
+    .levelup-card .big-emoji { font-size: 4rem; }
+    .levelup-card h2 { color: #f0e040; font-weight: 900; margin: 0.5rem 0; }
+    .levelup-card .fact-box {
+      background: rgba(135,206,235,0.12); border: 1px solid rgba(135,206,235,0.3);
+      border-radius: 12px; padding: 1rem; margin: 1rem 0; font-size: 0.95rem;
+      color: rgba(255,255,255,0.88); text-align: left;
+    }
+    #levelup-dismiss {
+      background: #f0e040; color: #0a1628; border: none; border-radius: 25px;
+      padding: 0.55rem 2rem; font-weight: 800; font-size: 1rem; cursor: pointer;
+    }
+
+    /* z-score readout */
+    .zscore-row { display: flex; gap: 0.8rem; flex-wrap: wrap; margin-top: 0.5rem; }
+    .zscore-chip {
+      padding: 0.2rem 0.7rem; border-radius: 12px; font-size: 0.8rem; font-weight: 700;
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
+    }
+    .zscore-chip.danger { background: rgba(231,76,60,0.25); border-color: #e74c3c; color: #fca5a5; }
+    .zscore-chip.warn   { background: rgba(249,115,22,0.22); border-color: #f97316; color: #fdba74; }
+    .zscore-chip.good   { background: rgba(34,197,94,0.18);  border-color: #22c55e; color: #86efac; }
+
+    /* Wellness timer indicator */
+    #wellness-timer-bar-wrap { margin-top: 0.6rem; }
+    #wellness-timer-label { font-size: 0.78rem; color: rgba(255,255,255,0.5); margin-bottom: 0.2rem; }
+    #wellness-timer-track { background: rgba(255,255,255,0.08); border-radius: 6px; height: 6px; }
+    #wellness-timer-fill  { height: 100%; border-radius: 6px; background: #f0e040; width: 0%; transition: width 0.9s linear; }
+
+    /* ── TEACHER MODE ──────────────────────────────────────────────────────── */
+    #teacher-mode {
+      min-height: 100vh;
+      background: #f8fafc;
+      color: #1e293b;
+      padding: 1.5rem;
+    }
+    #teacher-mode .teacher-header {
+      text-align: center; margin-bottom: 1.5rem;
+    }
+    #teacher-mode .teacher-header h1 {
+      font-weight: 900; color: #1e3a5f; font-size: 1.8rem;
+    }
+
+    .sidebar-card {
+      background: #fff; border-radius: 14px; padding: 1.4rem;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+      height: 100%;
+    }
+    .sidebar-card h6 { font-weight: 800; font-size: 0.78rem; text-transform: uppercase;
+                        letter-spacing: 0.06em; color: #64748b; margin-bottom: 0.5rem; }
+    .sidebar-card .standard-badge {
+      display: inline-block; background: #dbeafe; color: #1d4ed8;
+      border-radius: 8px; padding: 0.2rem 0.7rem; font-size: 0.78rem;
+      font-weight: 700; margin-bottom: 1rem;
+    }
+    .sidebar-card .prompt-box {
+      background: #f0fdf4; border-left: 4px solid #22c55e;
+      border-radius: 0 8px 8px 0; padding: 0.8rem 1rem;
+      font-size: 0.88rem; color: #166534; margin-bottom: 1rem;
+    }
+    .sidebar-card .sync-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.82rem; color: #475569;
+    }
+    .pulse-dot {
+      width: 10px; height: 10px; border-radius: 50%; background: #22c55e;
+      animation: dotPulse 1.4s infinite;
+    }
+    @keyframes dotPulse {
+      0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.6); }
+      50%       { opacity: 0.7; box-shadow: 0 0 0 6px rgba(34,197,94,0); }
+    }
+    .graph-container {
+      background: #fff; border-radius: 14px; padding: 0.75rem;
+      border: 1px solid #e2e8f0; box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    .nav-tabs .nav-link { font-weight: 700; color: #475569; }
+    .nav-tabs .nav-link.active { color: #1d4ed8; background: #fff; }
+  </style>
+</head>
+<body>
+
+<!-- ── Mode Toggle Bar ──────────────────────────────────────────────────────── -->
+<div id="mode-bar">
+  <span class="brand">🤖 ArgoBuddy</span>
+  <button class="mode-btn active" id="btn-student" onclick="switchMode('student')">🎮 Student Mode</button>
+  <button class="mode-btn"        id="btn-teacher" onclick="switchMode('teacher')">📚 Teacher Mode</button>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     STUDENT MODE — Nori-gotchi
+══════════════════════════════════════════════════════════════════════════ -->
+<div id="student-mode">
+  <div class="row g-3" style="max-width:960px;margin:0 auto;">
+
+    <!-- Avatar Column -->
+    <div class="col-md-4">
+      <div class="nori-card" style="text-align:center;">
+        <div id="nori-avatar">🤖</div>
+        <div id="nori-status">Nori is exploring…</div>
+        <div id="zone-badge">Loading…</div>
+        <div class="zscore-row" id="zscore-chips" style="justify-content:center;margin-top:0.8rem;"></div>
+      </div>
+
+      <!-- Wellness Bars -->
+      <div class="nori-card">
+        <h5>🩺 Wellness Vitals</h5>
+
+        <div class="wellness-bar-wrap">
+          <div class="wellness-bar-header">
+            <span>🌡️ Thermal</span>
+            <span id="thermal-pct">100%</span>
+          </div>
+          <div class="wellness-track">
+            <div class="wellness-fill well-thermal" id="thermal-fill" style="width:100%"></div>
+          </div>
+        </div>
+
+        <div class="wellness-bar-wrap">
+          <div class="wellness-bar-header">
+            <span>🌊 Buoyancy</span>
+            <span id="buoyancy-pct">100%</span>
+          </div>
+          <div class="wellness-track">
+            <div class="wellness-fill well-buoyancy" id="buoyancy-fill" style="width:100%"></div>
+          </div>
+        </div>
+
+        <div class="wellness-bar-wrap">
+          <div class="wellness-bar-header">
+            <span>🔋 Battery</span>
+            <span id="battery-pct">100%</span>
+          </div>
+          <div class="wellness-track">
+            <div class="wellness-fill well-battery" id="battery-fill" style="width:100%"></div>
+          </div>
+        </div>
+
+        <div id="wellness-timer-bar-wrap">
+          <div id="wellness-timer-label">Keep all vitals healthy to level up! ⚡</div>
+          <div id="wellness-timer-track">
+            <div id="wellness-timer-fill"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Controls Column -->
+    <div class="col-md-8">
+      <!-- Depth -->
+      <div class="nori-card">
+        <h5>📍 Dive Depth</h5>
+        <div id="depth-strip"></div>
+        <div class="slider-label">
+          <span>🌞 Surface (0 m)</span>
+          <span class="val" id="depth-val">100 m</span>
+          <span>🌑 Deep (2000 m)</span>
+        </div>
+        <input type="range" id="depth-slider" min="0" max="2000" value="100" step="10"
+               oninput="onDepthChange(this.value)" />
+        <div id="zone-desc" style="margin-top:0.6rem;font-size:0.85rem;color:rgba(255,255,255,0.65);"></div>
+      </div>
+
+      <!-- Temperature -->
+      <div class="nori-card">
+        <h5>🌡️ Temperature Sensor</h5>
+        <div class="slider-label">
+          <span id="temp-min-label">—</span>
+          <span class="val" id="temp-val">—</span>
+          <span id="temp-max-label">—</span>
+        </div>
+        <input type="range" id="temp-slider" min="1" max="20" value="12" step="0.1"
+               oninput="onTempChange(this.value)" />
+        <div id="temp-baseline-note" style="font-size:0.8rem;color:rgba(255,255,255,0.5);margin-top:0.3rem;"></div>
+      </div>
+
+      <!-- Salinity -->
+      <div class="nori-card">
+        <h5>🧂 Salinity Sensor</h5>
+        <div class="slider-label">
+          <span id="sal-min-label">—</span>
+          <span class="val" id="sal-val">—</span>
+          <span id="sal-max-label">—</span>
+        </div>
+        <input type="range" id="sal-slider" min="32" max="35" value="33.4" step="0.01"
+               oninput="onSalChange(this.value)" />
+        <div id="sal-baseline-note" style="font-size:0.8rem;color:rgba(255,255,255,0.5);margin-top:0.3rem;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Level-up overlay -->
+<div id="levelup-overlay">
+  <div class="levelup-card">
+    <div class="big-emoji">⭐</div>
+    <h2>LEVEL UP!</h2>
+    <p style="color:rgba(255,255,255,0.75);">Nori stayed healthy for 10 seconds!</p>
+    <div class="fact-box" id="levelup-fact"></div>
+    <button id="levelup-dismiss" onclick="dismissLevelUp()">Keep Exploring! 🚀</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════════
+     TEACHER MODE — Curriculum Dashboard
+══════════════════════════════════════════════════════════════════════════ -->
+<div id="teacher-mode" style="display:none;">
+
+  <div style="max-width:1200px;margin:0 auto;">
+    <div class="teacher-header">
+      <h1>🌊 ArgoBuddy — Curriculum Dashboard</h1>
+      <p class="text-muted" style="font-size:0.9rem;">Real Argo float data · Float 4901639 · Nov 2015 – Jan 2017</p>
+    </div>
+
+    <!-- Tabs -->
+    <ul class="nav nav-tabs mb-3" id="teacherTabs">
+      <li class="nav-item">
+        <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-ts"
+                onclick="loadTSGraph()">💧 Water Identity</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-profile"
+                onclick="loadProfileGraph()">🌊 Ocean Layers</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-dist"
+                onclick="loadDistGraph()">📊 Statistical Safety</button>
+      </li>
+    </ul>
+
+    <div class="tab-content">
+
+      <!-- ── Tab 1: T-S Diagram ──────────────────────────────────────────── -->
+      <div class="tab-pane fade show active" id="tab-ts">
+        <div class="row g-3">
+          <div class="col-lg-8">
+            <div class="graph-container">
+              <div id="plot-ts" style="height:500px;">
+                <div class="d-flex align-items-center justify-content-center h-100 text-muted">
+                  Loading T-S Diagram…
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="sidebar-card">
+              <h6>Target Standard</h6>
+              <span class="standard-badge">NGSS MS-ESS3-5</span>
+
+              <h6>What This Graph Shows</h6>
+              <p style="font-size:0.88rem;color:#475569;">
+                Every water mass has a unique Temperature-Salinity signature — like a fingerprint.
+                The colored scatter shows all of Nori's readings, colored by depth.
+                The <strong style="color:red;">★ red star</strong> is the student's live reading.
+              </p>
+
+              <h6>Discussion Prompt</h6>
+              <div class="prompt-box">
+                "Why do all the deepest readings cluster in the bottom-right corner?
+                What does that tell us about how salinity and temperature change with depth?"
+              </div>
+
+              <h6>Live Student Data</h6>
+              <div class="sync-row">
+                <div class="pulse-dot"></div>
+                <span>Student Data Linked — star updates with sliders</span>
+              </div>
+
+              <div style="margin-top:1rem;padding:0.8rem;background:#f0f9ff;border-radius:10px;font-size:0.82rem;color:#0369a1;">
+                <strong>Tip for teachers:</strong> Ask students to move the temperature slider
+                and watch the star travel vertically. Move salinity to shift it horizontally.
+                Can they match a historical cluster?
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Tab 2: Vertical Profiles ─────────────────────────────────────── -->
+      <div class="tab-pane fade" id="tab-profile">
+        <div class="row g-3">
+          <div class="col-lg-8">
+            <div class="graph-container">
+              <div id="plot-profile" style="height:520px;">
+                <div class="d-flex align-items-center justify-content-center h-100 text-muted">
+                  Loading Profiles…
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="sidebar-card">
+              <h6>Target Standard</h6>
+              <span class="standard-badge">NGSS MS-ESS3-5</span>
+
+              <h6>What This Graph Shows</h6>
+              <p style="font-size:0.88rem;color:#475569;">
+                How temperature and salinity change with depth in the real ocean.
+                The <strong>thermocline</strong> (rapid temperature drop ~200 m) and
+                <strong>halocline</strong> (salinity jump) are directly visible.
+              </p>
+
+              <h6>Discussion Prompt</h6>
+              <div class="prompt-box">
+                "Find the thermocline on the left panel. Why does temperature drop so sharply
+                between 100 m and 300 m? What would happen to marine life if that boundary shifted
+                50 m deeper because of warming?"
+              </div>
+
+              <h6>Live Student Data</h6>
+              <div class="sync-row">
+                <div class="pulse-dot"></div>
+                <span>Student Data Linked</span>
+              </div>
+
+              <div style="margin-top:1rem;padding:0.8rem;background:#f0f9ff;border-radius:10px;font-size:0.82rem;color:#0369a1;">
+                <strong>Key insight:</strong> Temperature drops ~9 °C between surface and 200 m,
+                then stabilises near 3 °C. Salinity increases ~1.2 PSU with depth — denser,
+                saltier water sinks and drives global ocean circulation.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Tab 3: Zone Distributions ─────────────────────────────────────── -->
+      <div class="tab-pane fade" id="tab-dist">
+        <div class="row g-3">
+          <div class="col-lg-8">
+            <div class="graph-container">
+              <div id="plot-dist" style="height:460px;">
+                <div class="d-flex align-items-center justify-content-center h-100 text-muted">
+                  Loading Distributions…
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="col-lg-4">
+            <div class="sidebar-card">
+              <h6>Target Standard</h6>
+              <span class="standard-badge">NGSS MS-ESS3-5</span>
+
+              <h6>What This Graph Shows</h6>
+              <p style="font-size:0.88rem;color:#475569;">
+                How frequently Nori recorded each temperature across 168 dive cycles.
+                The <strong>dashed line</strong> is the historical baseline;
+                the <strong>green band</strong> is the normal comfort zone (±1 tolerance unit).
+              </p>
+
+              <h6>Discussion Prompt</h6>
+              <div class="prompt-box">
+                "Compare the width of the three distributions. Why is the Sunlight Zone spread
+                so much wider than the Midnight Zone? What does a narrow distribution tell us
+                about stability — and why does that matter for deep-sea creatures?"
+              </div>
+
+              <h6>Live Student Data</h6>
+              <div class="sync-row">
+                <div class="pulse-dot"></div>
+                <span>Student Data Linked</span>
+              </div>
+
+              <div style="margin-top:1rem;padding:0.8rem;background:#f0f9ff;border-radius:10px;font-size:0.82rem;color:#0369a1;">
+                <strong>Activity idea:</strong> Have students set Nori to each zone in Student Mode
+                and identify whether their chosen temperature falls inside or outside the green band.
+                Discuss what a >1.5 SD anomaly means ecologically.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /tab-content -->
+  </div>
+</div>
+
+<!-- Bootstrap 5 JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+/* ============================================================
+   ArgoBuddy — Frontend Logic
+   ============================================================
+
+   BRIDGE POINTS:
+     /api/zones        → zoneStats  (drives slider ranges + game logic)
+     /api/graph/ts     → Plotly JSON rendered in #plot-ts
+     /api/graph/profile → Plotly JSON rendered in #plot-profile
+     /api/graph/dist   → Plotly JSON rendered in #plot-dist
+
+   Shared state (syncs Student ↔ Teacher):
+     currentTemp, currentSal  used to update the live red star (trace[1])
+   ============================================================ */
+
+  // ── Shared state ────────────────────────────────────────────────────────────
+  let zoneStats       = {};
+  let currentZone     = 'sunlight';
+  let currentTemp     = 12.2;
+  let currentSal      = 33.36;
+
+  // Wellness / level-up tracking
+  let wellnessGoodSeconds = 0;
+  let levelUpShown        = false;
+  let levelUpCooldown     = false;
+  const LEVELUP_SECONDS   = 10;
+  const WELLNESS_THRESHOLD = 70; // % — all bars must be above this
+
+  // Plotly load flags (lazy-load only once)
+  let tsLoaded      = false;
+  let profileLoaded = false;
+  let distLoaded    = false;
+
+  // Zone descriptors shown in student mode
+  const ZONE_DESC = {
+    sunlight: '🌞 <strong>Sunlight Zone (0–200 m)</strong> — Where 90% of marine life lives. Warm, colorful, vulnerable.',
+    twilight: '🌅 <strong>Twilight Zone (200–1000 m)</strong> — The thermocline. Barely any sunlight. Bioluminescent creatures.',
+    midnight: '🌑 <strong>Midnight Zone (1000–2000 m)</strong> — Pitch black. Near-freezing. Stable for centuries.',
+  };
+
+  // ── Fetch zone stats from Flask/nori_backend on load ────────────────────────
+  fetch('/api/zones')
+    .then(r => r.json())
+    .then(data => {
+      zoneStats = data;
+      applyZone('sunlight', false);
+      startWellnessTimer();
+    });
+
+  // ── Mode toggle ─────────────────────────────────────────────────────────────
+  function switchMode(mode) {
+    document.getElementById('student-mode').style.display = mode === 'student' ? '' : 'none';
+    document.getElementById('teacher-mode').style.display = mode === 'teacher' ? '' : 'none';
+    document.getElementById('btn-student').classList.toggle('active', mode === 'student');
+    document.getElementById('btn-teacher').classList.toggle('active', mode === 'teacher');
+
+    // Pre-load TS graph when teacher mode first opens
+    if (mode === 'teacher' && !tsLoaded) loadTSGraph();
+  }
+
+  // ── Depth slider ────────────────────────────────────────────────────────────
+  function onDepthChange(val) {
+    const depth = parseInt(val);
+    document.getElementById('depth-val').textContent = depth + ' m';
+
+    // Background interpolation: Azure(0m) → Navy(1000m) → Black(2000m)
+    let bg;
+    if (depth <= 1000) {
+      const t = depth / 1000;
+      bg = `rgb(${lerp(135,0,t)}, ${lerp(206,31,t)}, ${lerp(235,91,t)})`;
+    } else {
+      const t = (depth - 1000) / 1000;
+      bg = `rgb(${lerp(0,0,t)}, ${lerp(31,0,t)}, ${lerp(91,0,t)})`;
+    }
+    document.getElementById('student-mode').style.background =
+      `linear-gradient(180deg, ${bg} 0%, rgba(0,0,0,0.9) 100%)`;
+
+    // Zone change
+    let zone = depth < 200 ? 'sunlight' : depth < 1000 ? 'twilight' : 'midnight';
+    if (zone !== currentZone) applyZone(zone, true);
+  }
+
+  function lerp(a, b, t) { return Math.round(a + (b - a) * t); }
+
+  // ── Apply zone: update slider ranges + defaults ──────────────────────────────
+  function applyZone(zkey, snap) {
+    currentZone = zkey;
+    const s = zoneStats[zkey];
+    if (!s) return;
+
+    // Update zone badge
+    document.getElementById('zone-badge').textContent = s.emoji + ' ' + s.name + ' · ' + s.depth;
+    document.getElementById('zone-desc').innerHTML = ZONE_DESC[zkey];
+
+    // Temperature slider
+    const tSlider = document.getElementById('temp-slider');
+    tSlider.min  = s.temp_slider_min;
+    tSlider.max  = s.temp_slider_max;
+    if (snap) {
+      tSlider.value = s.temp_mean;
+      currentTemp   = s.temp_mean;
+    }
+    document.getElementById('temp-min-label').textContent = s.temp_slider_min + ' °C';
+    document.getElementById('temp-max-label').textContent = s.temp_slider_max + ' °C';
+    updateTempDisplay();
+
+    // Salinity slider
+    const sSlider = document.getElementById('sal-slider');
+    sSlider.min  = s.sal_slider_min;
+    sSlider.max  = s.sal_slider_max;
+    if (snap) {
+      sSlider.value = s.sal_mean;
+      currentSal    = s.sal_mean;
+    }
+    document.getElementById('sal-min-label').textContent = s.sal_slider_min + ' PSU';
+    document.getElementById('sal-max-label').textContent = s.sal_slider_max + ' PSU';
+    updateSalDisplay();
+
+    updateWellness();
+    updateAvatar();
+    updateTSStar();
+  }
+
+  // ── Temperature slider ──────────────────────────────────────────────────────
+  function onTempChange(val) {
+    currentTemp = parseFloat(val);
+    updateTempDisplay();
+    updateWellness();
+    updateAvatar();
+    updateTSStar();
+  }
+
+  function updateTempDisplay() {
+    const s = zoneStats[currentZone];
+    document.getElementById('temp-val').textContent = parseFloat(currentTemp).toFixed(1) + ' °C';
+    if (s) {
+      const delta = (currentTemp - s.temp_mean).toFixed(2);
+      const sign  = delta >= 0 ? '+' : '';
+      document.getElementById('temp-baseline-note').textContent =
+        `Baseline: ${s.temp_mean.toFixed(1)} °C  |  deviation: ${sign}${delta} °C`;
+    }
+  }
+
+  // ── Salinity slider ─────────────────────────────────────────────────────────
+  function onSalChange(val) {
+    currentSal = parseFloat(val);
+    updateSalDisplay();
+    updateWellness();
+    updateAvatar();
+    updateTSStar();
+  }
+
+  function updateSalDisplay() {
+    const s = zoneStats[currentZone];
+    document.getElementById('sal-val').textContent = parseFloat(currentSal).toFixed(3) + ' PSU';
+    if (s) {
+      const delta = (currentSal - s.sal_mean).toFixed(3);
+      const sign  = delta >= 0 ? '+' : '';
+      document.getElementById('sal-baseline-note').textContent =
+        `Baseline: ${s.sal_mean.toFixed(3)} PSU  |  deviation: ${sign}${delta} PSU`;
+    }
+  }
+
+  // ── Wellness bars ───────────────────────────────────────────────────────────
+  // Bar % = 100 when |z| ≤ 1.5,  drains linearly to 0 at |z| = 4.5
+  function zscoreToWellness(z) {
+    const absZ = Math.abs(z);
+    if (absZ <= 1.5) return 100;
+    return Math.max(0, 100 - ((absZ - 1.5) / 3) * 100);
+  }
+
+  function updateWellness() {
+    const s = zoneStats[currentZone];
+    if (!s) return;
+
+    const tempZ = (currentTemp - s.temp_mean) / s.temp_std;
+    const salZ  = (currentSal  - s.sal_mean)  / s.sal_std;
+    const combZ = (Math.abs(tempZ) + Math.abs(salZ)) / 2;
+
+    const thermal  = zscoreToWellness(tempZ);
+    const buoyancy = zscoreToWellness(salZ);
+    const battery  = zscoreToWellness(combZ);
+
+    setBar('thermal',  thermal);
+    setBar('buoyancy', buoyancy);
+    setBar('battery',  battery);
+
+    // Z-score chips
+    const chips = document.getElementById('zscore-chips');
+    chips.innerHTML = zChip('🌡️', tempZ, 'Temp') + zChip('🧂', salZ, 'Sal');
+
+    return { thermal, buoyancy, battery };
+  }
+
+  function setBar(name, pct) {
+    document.getElementById(name + '-fill').style.width = pct + '%';
+    document.getElementById(name + '-pct').textContent  = Math.round(pct) + '%';
+  }
+
+  function zChip(icon, z, label) {
+    const cls = Math.abs(z) > 2 ? 'danger' : Math.abs(z) > 1.5 ? 'warn' : 'good';
+    const sign = z >= 0 ? '+' : '';
+    return `<span class="zscore-chip ${cls}">${icon} ${label}: ${sign}${z.toFixed(2)}σ</span>`;
+  }
+
+  // ── Nori avatar ─────────────────────────────────────────────────────────────
+  function updateAvatar() {
+    const s = zoneStats[currentZone];
+    if (!s) return;
+
+    const tempZ = (currentTemp - s.temp_mean) / s.temp_std;
+    const salZ  = (currentSal  - s.sal_mean)  / s.sal_std;
+
+    let emoji, status;
+    const worstZ = Math.max(Math.abs(tempZ), Math.abs(salZ));
+
+    if (worstZ <= 1.5) {
+      emoji  = '😊';
+      status = 'Nori is Happy — conditions are normal! 🌊';
+    } else if (tempZ > 1.5) {
+      emoji  = '🥵';
+      status = 'Nori is overheating! Temperature too HIGH ↑';
+    } else if (tempZ < -1.5) {
+      emoji  = '🥶';
+      status = 'Nori is freezing! Temperature too LOW ↓';
+    } else if (salZ > 1.5) {
+      emoji  = '🧂';
+      status = 'Nori detects high salinity! Water too SALTY';
+    } else {
+      emoji  = '💧';
+      status = 'Nori detects low salinity! Water too FRESH';
+    }
+
+    const el = document.getElementById('nori-avatar');
+    if (el.textContent !== emoji) {
+      el.textContent = emoji;
+      el.classList.remove('pulse');
+      void el.offsetWidth; // reflow
+      el.classList.add('pulse');
+    }
+    document.getElementById('nori-status').textContent = status;
+  }
+
+  // ── Level-up timer ──────────────────────────────────────────────────────────
+  function startWellnessTimer() {
+    setInterval(() => {
+      if (levelUpCooldown) return;
+      const w = updateWellness();
+      if (!w) return;
+      const allGood = w.thermal >= WELLNESS_THRESHOLD &&
+                      w.buoyancy >= WELLNESS_THRESHOLD &&
+                      w.battery  >= WELLNESS_THRESHOLD;
+
+      if (allGood) {
+        wellnessGoodSeconds++;
+      } else {
+        wellnessGoodSeconds = 0;
+      }
+
+      const pct = Math.min(100, (wellnessGoodSeconds / LEVELUP_SECONDS) * 100);
+      document.getElementById('wellness-timer-fill').style.width = pct + '%';
+
+      if (wellnessGoodSeconds >= LEVELUP_SECONDS) {
+        triggerLevelUp();
+        wellnessGoodSeconds = 0;
+      }
+    }, 1000);
+  }
+
+  function triggerLevelUp() {
+    if (levelUpShown) return;
+    const s = zoneStats[currentZone];
+    document.getElementById('levelup-fact').innerHTML =
+      '<strong>Did You Know?</strong><br>' + (s ? s.fact : '🌊 The ocean is amazing!');
+    document.getElementById('levelup-overlay').classList.add('show');
+    levelUpCooldown = true;
+  }
+
+  function dismissLevelUp() {
+    document.getElementById('levelup-overlay').classList.remove('show');
+    document.getElementById('wellness-timer-fill').style.width = '0%';
+    // Allow level-up again after 5 s cooldown
+    setTimeout(() => { levelUpCooldown = false; }, 5000);
+  }
+
+  // ── Live red star on T-S diagram ────────────────────────────────────────────
+  // Called whenever temp or salinity changes.
+  // BRIDGE: updates trace index 1 (the empty 'live-star' trace returned by
+  //         nori_backend.get_ts_diagram_json())
+  function updateTSStar() {
+    if (!tsLoaded) return;
+    Plotly.restyle('plot-ts', { x: [[currentSal]], y: [[currentTemp]] }, [1]);
+  }
+
+  // ── Plotly graph loaders (lazy, one-time) ────────────────────────────────────
+
+  // BRIDGE → GET /api/graph/ts  →  nori_backend.get_ts_diagram_json()
+  function loadTSGraph() {
+    if (tsLoaded) return;
+    fetch('/api/graph/ts')
+      .then(r => r.json())
+      .then(fig => {
+        Plotly.newPlot('plot-ts', fig.data, fig.layout, { responsive: true });
+        tsLoaded = true;
+        updateTSStar(); // place star at current student values
+      });
+  }
+
+  // BRIDGE → GET /api/graph/profile  →  nori_backend.get_salinity_profile_json()
+  function loadProfileGraph() {
+    if (profileLoaded) return;
+    fetch('/api/graph/profile')
+      .then(r => r.json())
+      .then(fig => {
+        Plotly.newPlot('plot-profile', fig.data, fig.layout, { responsive: true });
+        profileLoaded = true;
+      });
+  }
+
+  // BRIDGE → GET /api/graph/distributions  →  nori_backend.get_zone_distributions_json()
+  function loadDistGraph() {
+    if (distLoaded) return;
+    fetch('/api/graph/distributions')
+      .then(r => r.json())
+      .then(fig => {
+        Plotly.newPlot('plot-dist', fig.data, fig.layout, { responsive: true });
+        distLoaded = true;
+      });
+  }
+</script>
+</body>
+</html>
