@@ -11,7 +11,8 @@ import json, os
 from datetime import datetime
 
 app = Flask(__name__, static_folder=None)
-_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'single_argo.csv')
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_CSV  = os.path.join(_HERE, 'single_argo.csv')
 
 # ── Zone data ─────────────────────────────────────────────────────────────────
 ZONES = {
@@ -134,6 +135,45 @@ FACTS = {
     'midnight':"The water here may be over 1,000 years old — it sank from the surface back before Columbus sailed! ⏳",
 }
 
+ZONE_EDU = {
+    'sunlight': {
+        'science_facts': [
+            'The ocean has absorbed 90% of Earth\'s excess heat since industrialization — most in this surface zone.',
+            'Phytoplankton here produce 50% of ALL the oxygen on Earth through photosynthesis.',
+            'El Niño events can warm this zone by 2–3°C, triggering mass coral bleaching events.',
+            'Over 25% of ALL marine species depend on coral reefs found in this zone.',
+            'This zone extends from the surface to 200m — about as deep as the Eiffel Tower is tall.',
+        ],
+        'tipping_text': 'Above 19.5°C, coral bleaching becomes irreversible. Coral reefs take 10–30 years to recover — if they recover at all. Once 50% of a reef is bleached, the entire ecosystem can collapse within months.',
+        'key_numbers': [('Depth range','0–200 m'),('Avg temp','12.2°C'),('Avg salinity','33.36 PSU'),('Tipping point','19.5°C'),('Light level','Full sunlight')],
+        'animal_spotlight': ('🐠', 'Clownfish', 'Lives inside sea anemone tentacles that would sting any other fish. It has a special mucus coating. If the coral bleaches, the anemone dies — and so does the clownfish home.'),
+    },
+    'twilight': {
+        'science_facts': [
+            '100% of creatures here make their own light (bioluminescence) — no photon from the sun reaches this depth.',
+            'Millions of creatures perform a daily "vertical migration" — rising at night to feed, sinking at dawn to hide.',
+            'The "twilight zone pump" moves carbon from surface to deep, locking away 6 billion tons of CO₂ per year.',
+            'The giant squid lives here — the largest invertebrate on Earth, reaching 13 meters long.',
+            'The oxygen minimum zone overlaps this depth — some parts have almost no breathable oxygen at all.',
+        ],
+        'tipping_text': 'When heat breaks through the thermocline above 10.3°C, the oxygen minimum zone expands. Deep-sea creatures have nowhere to go — they can\'t migrate to a different ocean. Species loss here is permanent on human timescales.',
+        'key_numbers': [('Depth range','200–1000 m'),('Avg temp','6.8°C'),('Avg salinity','34.12 PSU'),('Tipping point','10.3°C'),('Light level','< 1% sunlight')],
+        'animal_spotlight': ('💡', 'Lanternfish', 'Has rows of photophores (light organs) on its belly to camouflage against faint surface light from below — called counterillumination. There are more lanternfish on Earth than any other vertebrate.'),
+    },
+    'midnight': {
+        'science_facts': [
+            'The water here is 200–1,000 years old — it last touched the surface before Columbus reached the Americas.',
+            'The midnight zone drives the Global Ocean Conveyor Belt — regulating climate on every continent.',
+            'Over 200,000 species live here; scientists estimate 90% are still undiscovered.',
+            'Pressure here is 200× the surface — equivalent to 50 jumbo jets standing on your head.',
+            'Temperature barely changes year-to-year. A 0.1°C change is a major scientific alarm.',
+        ],
+        'tipping_text': 'The midnight zone has been stable for centuries. Any warming triggers thermohaline circulation collapse. Effects last 300–1,000 years — longer than all of recorded human history. There is NO recovery on human timescales.',
+        'key_numbers': [('Depth range','1000–2000 m'),('Avg temp','3.0°C'),('Avg salinity','34.55 PSU'),('Tipping point','4.4°C'),('Light level','0% — total darkness')],
+        'animal_spotlight': ('🐟', 'Anglerfish', 'Uses a bioluminescent lure to attract prey in total darkness. The female is 10× larger than the male — who permanently fuses to her body and shares her bloodstream. Nature\'s most extreme partnership.'),
+    },
+}
+
 # ── Data loading ──────────────────────────────────────────────────────────────
 _df = None
 def get_df():
@@ -240,6 +280,134 @@ def get_ts_data():
 
 def safe_json(obj):
     return json.dumps(obj).replace('</script>', r'<\/script>')
+
+# ── Teacher data functions ─────────────────────────────────────────────────────
+def get_teacher_ts_data():
+    df = get_df()
+    sc, tc = 'salinity (dimensionless)', 'temperature (degree_celsius)'
+    if not len(df) or sc not in df.columns:
+        return {'zones': {}, 'track': []}
+    d = df[[tc, sc, 'zone']].dropna()
+    zones_out = {}
+    for z in ('sunlight', 'twilight', 'midnight'):
+        sub = d[d['zone'] == z]
+        samp = sub.sample(min(500, len(sub)), random_state=42) if len(sub) else sub
+        zones_out[z] = [{'x': round(float(r[sc]), 3), 'y': round(float(r[tc]), 2)}
+                        for _, r in samp.iterrows()]
+    track = get_track()
+    ts_track = [{'x': t['sm'], 'y': t['tm'], 'cycle': t['cycle'], 'date': t.get('date', '')}
+                for t in track if 'sm' in t and 'tm' in t]
+    return {'zones': zones_out, 'track': ts_track}
+
+
+def get_teacher_profiles_data():
+    df = get_df()
+    if not len(df): return []
+    tc, sc, pc = 'temperature (degree_celsius)', 'salinity (dimensionless)', 'pressure (decibar)'
+    bins    = list(range(0, 2100, 50))
+    centers = [b + 25 for b in bins[:-1]]
+    d = df[[pc, tc]].copy()
+    d['bin'] = pd.cut(d[pc], bins=bins, labels=centers)
+    tgrp = (d.groupby('bin', observed=True)
+             .agg(tm=(tc, 'mean'), ts=(tc, 'std'))
+             .reset_index().dropna(subset=['tm']))
+    s_dict = {}
+    if sc in df.columns:
+        ds = df[[pc, sc]].dropna().copy()
+        ds['bin'] = pd.cut(ds[pc], bins=bins, labels=centers)
+        sgrp = (ds.groupby('bin', observed=True)
+                  .agg(sm=(sc, 'mean'), ss=(sc, 'std'))
+                  .reset_index().dropna(subset=['sm']))
+        s_dict = {int(r['bin']): {'sm': round(float(r['sm']), 3),
+                                   'ss': round(float(r['ss']), 3) if not pd.isna(r['ss']) else 0}
+                  for _, r in sgrp.iterrows()}
+    out = []
+    for _, r in tgrp.iterrows():
+        dv = int(r['bin'])
+        item = {'d': dv, 'tm': round(float(r['tm']), 2),
+                'ts': round(float(r['ts']), 2) if not pd.isna(r['ts']) else 0}
+        if dv in s_dict:
+            item.update(s_dict[dv])
+        out.append(item)
+    return out
+
+
+def get_teacher_distributions_data():
+    df = get_df()
+    tc = 'temperature (degree_celsius)'
+    if not len(df): return {}
+    out = {}
+    for z in ('sunlight', 'twilight', 'midnight'):
+        col = df[df['zone'] == z][tc].dropna()
+        if not len(col):
+            continue
+        lo, hi = float(col.min()), float(col.max())
+        nbins = 30
+        step  = (hi - lo) / nbins
+        labels = [round(lo + i * step, 2) for i in range(nbins)]
+        counts = [0] * nbins
+        for v in col:
+            b = min(nbins - 1, max(0, int((v - lo) / step)))
+            counts[b] += 1
+        zd = ZONES[z]
+        out[z] = {'labels': labels, 'counts': counts,
+                  'baseline': zd['baseline'], 'tolerance': zd['tolerance'],
+                  'lo': round(lo, 2), 'hi': round(hi, 2)}
+    return out
+
+
+_CCE1_CACHE = None
+
+def get_cce1_data():
+    global _CCE1_CACHE
+    if _CCE1_CACHE is not None:
+        return _CCE1_CACHE
+    cce1_url  = 'https://dods.ndbc.noaa.gov/thredds/fileServer/oceansites/DATA/CCE1/OS_CCE1_17_D_CTD.nc'
+    cce1_file = os.path.join(_HERE, 'cce1_cache.nc')
+    if not os.path.exists(cce1_file):
+        try:
+            import urllib.request
+            print('Downloading CCE1 mooring data (~may take a moment)…')
+            urllib.request.urlretrieve(cce1_url, cce1_file)
+            print('CCE1 download complete.')
+        except Exception as e:
+            print(f'CCE1 download failed: {e}')
+            _CCE1_CACHE = {'time': [], 'temp': [], 'sal': [], 'error': str(e)}
+            return _CCE1_CACHE
+    try:
+        import netCDF4 as nc4
+        with nc4.Dataset(cce1_file) as ds:
+            tv = next((ds.variables[k] for k in ('TIME','time','JULD','juld') if k in ds.variables), None)
+            if tv is None:
+                raise ValueError('No time variable in CCE1 file')
+            try:
+                dates = nc4.num2date(tv[:], tv.units, calendar=getattr(tv,'calendar','standard'))
+                time_strs = [d.strftime('%Y-%m-%dT%H:%M:%SZ') if hasattr(d,'strftime') else str(d) for d in dates]
+            except Exception:
+                time_strs = [str(i) for i in range(len(tv[:]))]
+            def _extract(names, ndim_slice):
+                for vn in names:
+                    if vn in ds.variables:
+                        raw = ds.variables[vn][:]
+                        raw = raw[ndim_slice] if raw.ndim > 1 else raw
+                        arr = np.ma.filled(raw.flatten(), fill_value=np.nan)
+                        return [round(float(v), 3) if not np.isnan(v) else None for v in arr]
+                return []
+            temp_out = _extract(('TEMP','temperature','TEMP_ADJUSTED','temp'), (slice(None), 0))
+            sal_out  = _extract(('PSAL','salinity','PSAL_ADJUSTED','sal','SALT'), (slice(None), 0))
+            _CCE1_CACHE = {'time': time_strs, 'temp': temp_out, 'sal': sal_out}
+    except Exception as e:
+        print(f'CCE1 read failed: {e}')
+        _CCE1_CACHE = {'time': [], 'temp': [], 'sal': [], 'error': str(e)}
+    return _CCE1_CACHE
+
+
+def get_teacher_cce1_overlay():
+    cce1  = get_cce1_data()
+    track = get_track()
+    nori  = [{'date': t['date'], 'temp': t['tm'], 'sal': t.get('sm'), 'cycle': t['cycle']}
+             for t in track if 'tm' in t and t.get('date')]
+    return {'cce1': cce1, 'nori': nori}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # LIVE STATE  (shared between student ↔ teacher in real-time)
@@ -379,6 +547,22 @@ def api_reset():
     _live['discoveries'] = []
     return jsonify({'ok': True})
 
+@app.route('/api/teacher/ts')
+def api_teacher_ts():
+    return jsonify(get_teacher_ts_data())
+
+@app.route('/api/teacher/profiles')
+def api_teacher_profiles():
+    return jsonify(get_teacher_profiles_data())
+
+@app.route('/api/teacher/distributions')
+def api_teacher_distributions():
+    return jsonify(get_teacher_distributions_data())
+
+@app.route('/api/teacher/cce1')
+def api_teacher_cce1():
+    return jsonify(get_teacher_cce1_overlay())
+
 # ── Teacher route ─────────────────────────────────────────────────────────────
 @app.route('/teacher')
 def teacher():
@@ -393,25 +577,16 @@ def teacher():
 
 @app.route('/')
 def index():
-    df = get_df()
-    hist, stats = {}, {'total': len(df), 'cycles': int(df['meta_cycle_number'].nunique()) if len(df) else 0}
+    df    = get_df()
+    stats = {'total': len(df), 'cycles': int(df['meta_cycle_number'].nunique()) if len(df) else 0}
     track = get_track()
-    for z in ('sunlight', 'twilight', 'midnight'):
-        col = df[df['zone'] == z]['temperature (degree_celsius)'].dropna() if len(df) else pd.Series()
-        hist[z] = col.sample(min(400, len(col)), random_state=42).tolist() if len(col) else []
-    sal_hist = get_sal_hist()
-    sal_prof = get_sal_profile()
-    ts_data  = get_ts_data()
     return (PAGE
             .replace('__ZONES__',    safe_json(ZONES))
             .replace('__MOODS__',    safe_json(MOODS))
             .replace('__FACTS__',    safe_json(FACTS))
-            .replace('__HIST__',     safe_json(hist))
+            .replace('__ZONE_EDU__', safe_json(ZONE_EDU))
             .replace('__STATS__',    safe_json(stats))
-            .replace('__TRACK__',    safe_json(track))
-            .replace('__SAL_HIST__', safe_json(sal_hist))
-            .replace('__SAL_PROF__', safe_json(sal_prof))
-            .replace('__TS_DATA__',  safe_json(ts_data)))
+            .replace('__TRACK__',    safe_json(track)))
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -424,6 +599,7 @@ PAGE = """<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -553,8 +729,56 @@ body{background:linear-gradient(170deg,#020c1e 0%,#041830 40%,#071f3d 70%,#030d1
 .pill-done{background:rgba(0,245,195,.15);color:#00f5c3;border:1px solid rgba(0,245,195,.35)}
 .pill-lock{background:rgba(255,255,255,.06);color:rgba(255,255,255,.27)}
 
-.zone-grid{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:1rem;padding:1rem;max-width:1300px;margin:0 auto}
+.zone-grid{display:grid;grid-template-columns:1.15fr 1fr 1.1fr;gap:1rem;padding:1rem;max-width:1300px;margin:0 auto}
 @media(max-width:920px){.zone-grid{grid-template-columns:1fr}}
+
+/* ── Educational cards (zone right column) ───────────────────────────────── */
+.edu-card{background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.12);border-radius:18px;padding:1.1rem;margin-bottom:.7rem}
+.edu-card-title{font-size:.73rem;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:rgba(255,255,255,.48);margin-bottom:.55rem}
+.edu-fact-list{list-style:none;padding:0;margin:0}
+.edu-fact-list li{font-size:.8rem;color:rgba(255,255,255,.82);line-height:1.55;padding:.28rem 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.edu-fact-list li:last-child{border-bottom:none}
+.edu-fact-list li::before{content:"✦ ";color:var(--za,#ff9f1c);font-size:.65rem}
+.edu-num-grid{display:grid;grid-template-columns:1fr 1fr;gap:.35rem}
+.edu-num-item{background:rgba(255,255,255,.05);border-radius:10px;padding:.5rem .7rem;text-align:center}
+.edu-num-label{font-size:.65rem;color:rgba(255,255,255,.38);font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.1rem}
+.edu-num-value{font-size:.88rem;font-weight:900;color:var(--za,#ff9f1c)}
+.edu-animal{display:flex;align-items:flex-start;gap:.7rem}
+.edu-animal-icon{font-size:2.4rem;flex-shrink:0;line-height:1}
+.edu-animal-text{font-size:.78rem;color:rgba(255,255,255,.78);line-height:1.5}
+.edu-tipping{background:linear-gradient(135deg,rgba(192,57,43,.12),rgba(231,76,60,.08));border:1.5px solid rgba(231,76,60,.35);border-radius:14px;padding:.85rem;font-size:.79rem;color:rgba(255,255,255,.8);line-height:1.55}
+.edu-tipping strong{color:#ff6b6b}
+
+/* ══ TEACHER SCREEN ═══════════════════════════════════════════════════ */
+#screen-teacher{padding:0;background:rgba(2,8,22,.6)}
+.teacher-hdr{padding:1.2rem 1.4rem .8rem;text-align:center;background:rgba(0,0,0,.3);border-bottom:1.5px solid rgba(0,212,255,.18)}
+.teacher-hdr h2{font-size:1.5rem;font-weight:900;background:linear-gradient(135deg,#ffd60a,#00f5c3);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.teacher-hdr p{font-size:.83rem;color:rgba(255,255,255,.5);margin-top:.25rem}
+.teacher-tabs{display:flex;gap:0;padding:0 1rem;background:rgba(0,0,0,.2);border-bottom:1.5px solid rgba(255,255,255,.08);overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none}
+.teacher-tabs::-webkit-scrollbar{display:none}
+.ttab{padding:.6rem 1.1rem;border:none;background:transparent;color:rgba(255,255,255,.42);font-family:'Nunito',sans-serif;font-weight:800;font-size:.78rem;cursor:pointer;white-space:nowrap;border-bottom:3px solid transparent;transition:all .2s;flex-shrink:0}
+.ttab:hover{color:rgba(255,255,255,.7)}
+.ttab.active{color:#ffd60a;border-bottom-color:#ffd60a}
+.teacher-tab-content{display:none}
+.teacher-tab-content.active{display:grid;grid-template-columns:1fr 420px;gap:0;min-height:calc(100vh - 240px)}
+@media(max-width:860px){.teacher-tab-content.active{grid-template-columns:1fr}}
+.teacher-chart-panel{padding:1.2rem 1.4rem;border-right:1.5px solid rgba(255,255,255,.08)}
+.teacher-chart-title{font-size:.95rem;font-weight:900;margin-bottom:.7rem;color:#ffd60a}
+.teacher-chart-wrap{background:rgba(255,255,255,.04);border-radius:14px;padding:.8rem;margin-bottom:.7rem;border:1px solid rgba(255,255,255,.07)}
+.teacher-chart-wrap .plotly-graph-div{background:transparent!important}
+.chart-interp{background:rgba(0,212,255,.07);border:1.5px solid rgba(0,212,255,.2);border-radius:12px;padding:.85rem;font-size:.8rem;color:rgba(255,255,255,.8);line-height:1.6;margin-top:.5rem}
+.chart-interp strong{color:#00d4ff}
+.teacher-lesson-panel{padding:1.2rem 1.4rem;overflow-y:auto;max-height:calc(100vh - 240px);background:rgba(255,255,255,.025)}
+.lesson-card{background:rgba(255,255,255,.06);border:1.5px solid rgba(255,255,255,.12);border-radius:16px;padding:1.1rem;margin-bottom:.8rem}
+.lesson-tag{display:inline-block;padding:.2rem .65rem;border-radius:8px;font-size:.68rem;font-weight:800;background:rgba(255,214,10,.18);color:#ffd60a;margin-bottom:.5rem}
+.lesson-card h4{font-size:.9rem;font-weight:900;margin-bottom:.55rem;color:rgba(255,255,255,.92)}
+.lesson-section{font-size:.78rem;font-weight:800;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.06em;margin:.65rem 0 .3rem}
+.lesson-list{list-style:none;padding:0;margin:0}
+.lesson-list li{font-size:.8rem;color:rgba(255,255,255,.75);line-height:1.55;padding:.2rem 0}
+.lesson-list li::before{content:"→ ";color:#00f5c3;font-weight:900}
+.ngss-badge{display:inline-block;padding:.22rem .7rem;border-radius:8px;font-size:.7rem;font-weight:800;background:rgba(0,212,255,.15);color:#00d4ff;border:1px solid rgba(0,212,255,.3);margin-top:.4rem}
+.teacher-loading{text-align:center;padding:3rem 1rem;color:rgba(255,255,255,.4);font-size:.9rem}
+.teacher-loading .spin{font-size:2rem;animation:bob 1s ease-in-out infinite;display:block;margin-bottom:.5rem}
 
 .slabel{display:flex;justify-content:space-between;font-size:.8rem;font-weight:800;color:rgba(255,255,255,.8);margin-bottom:.22rem}
 input[type=range]{width:100%;-webkit-appearance:none;appearance:none;height:9px;border-radius:5px;background:rgba(255,255,255,.15);outline:none;margin:.35rem 0;cursor:pointer}
@@ -587,19 +811,6 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25)}
 .pct-box .big{font-size:1.75rem;font-weight:900;color:var(--za,#ff9f1c)}
 .pct-box .small{font-size:.74rem;color:rgba(255,255,255,.5);font-weight:700}
 
-/* ══ DEEP DIVE DATA SECTION ══════════════════════════════════════════ */
-.deep-dive{padding:1rem;max-width:1300px;margin:.5rem auto}
-.deep-dive-head{font-size:1.1rem;font-weight:900;margin-bottom:.9rem;background:linear-gradient(135deg,#00d4ff,#c77dff);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.ddgrid{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
-@media(max-width:760px){.ddgrid{grid-template-columns:1fr}}
-.ddchart-wrap{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:1rem}
-.ddchart-title{font-size:.74rem;font-weight:800;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.05em;margin-bottom:.5rem}
-.ddchart-canvas{position:relative;height:220px}
-.stats-table{width:100%;border-collapse:collapse;font-size:.82rem}
-.stats-table th{font-size:.7rem;font-weight:800;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.06em;padding:.5rem .65rem;text-align:left;border-bottom:1.5px solid rgba(255,255,255,.1)}
-.stats-table td{padding:.5rem .65rem;border-bottom:1px solid rgba(255,255,255,.05);color:rgba(255,255,255,.85);vertical-align:middle}
-.stats-table tr:hover td{background:rgba(255,255,255,.03)}
-.ztag{display:inline-block;padding:.2rem .65rem;border-radius:10px;font-size:.72rem;font-weight:800}
 
 .zone-nav{display:flex;justify-content:space-between;align-items:center;padding:.9rem 1.3rem;border-top:1px solid rgba(255,255,255,.08);background:rgba(0,0,0,.25);gap:.7rem;flex-wrap:wrap}
 
@@ -777,35 +988,31 @@ h2{font-size:1.45rem;font-weight:900}h3{font-size:1.1rem;font-weight:800}
       <ul class="risk-list" id="risk-list"></ul>
       <div class="clim-box" id="clim-box"></div>
     </div>
-    <!-- Right -->
+    <!-- Right — Educational Facts Hub -->
     <div>
-      <div class="ctitle">📊 Historical mood in this zone</div>
-      <div class="chart-wrap"><canvas id="mood-chart"></canvas></div>
-      <div class="ctitle mt2">🌡️ Your temp vs real data</div>
-      <div class="chart-wrap"><canvas id="hist-chart"></canvas></div>
+      <div class="edu-card">
+        <div class="edu-card-title">🔬 Zone Science</div>
+        <ul class="edu-fact-list" id="zone-science-list"></ul>
+      </div>
+      <div class="edu-card">
+        <div class="edu-card-title">📊 Key Numbers</div>
+        <div class="edu-num-grid" id="zone-key-numbers"></div>
+      </div>
+      <div id="zone-tipping-card" class="edu-tipping">
+        <strong>⚠️ Climate Tipping Point:</strong><br>
+        <span id="zone-tipping-text"></span>
+      </div>
+      <div class="edu-card mt2">
+        <div class="edu-card-title">🐠 Animal Spotlight</div>
+        <div class="edu-animal" id="zone-animal">
+          <span class="edu-animal-icon" id="zone-animal-icon"></span>
+          <div>
+            <div style="font-size:.85rem;font-weight:900;color:rgba(255,255,255,.9);margin-bottom:.22rem" id="zone-animal-name"></div>
+            <div class="edu-animal-text" id="zone-animal-text"></div>
+          </div>
+        </div>
+      </div>
       <div class="fact-box mt2"><strong>🧠 Did you know?</strong><br><span id="zone-fact"></span></div>
-      <div class="pct-box mt2">
-        <div class="big" id="pct-n">—%</div>
-        <div class="small">of real readings are cooler than your setting</div>
-      </div>
-    </div>
-  </div>
-  <!-- Data Deep Dive Section -->
-  <div class="deep-dive" id="deep-dive-sec" style="border-top:1.5px solid rgba(255,255,255,.07);padding-top:1.3rem;margin-top:.5rem">
-    <div class="deep-dive-head">📊 Data Deep Dive</div>
-    <div class="ddgrid">
-      <div class="ddchart-wrap">
-        <div class="ddchart-title">🧂 Salinity Profile — Full Ocean Column</div>
-        <div class="ddchart-canvas"><canvas id="sal-prof-chart"></canvas></div>
-      </div>
-      <div class="ddchart-wrap">
-        <div class="ddchart-title">🌊 Temperature–Salinity Diagram (Water Masses)</div>
-        <div class="ddchart-canvas"><canvas id="ts-chart"></canvas></div>
-      </div>
-    </div>
-    <div class="ddchart-wrap">
-      <div class="ddchart-title">📈 Zone Comparison — Temperature &amp; Salinity Stats</div>
-      <div id="zone-table-wrap" style="overflow-x:auto;margin-top:.4rem"></div>
     </div>
   </div>
   <div class="zone-nav">
@@ -871,6 +1078,239 @@ h2{font-size:1.45rem;font-weight:900}h3{font-size:1.1rem;font-weight:800}
   </div>
 </div>
 
+<!-- ══ TEACHER SCREEN ═══════════════════════════════════════════════ -->
+<div id="screen-teacher" class="screen">
+  <div class="teacher-hdr">
+    <h2>🎓 Teacher Lesson Plans</h2>
+    <p>Real Argo Float Data · Ocean Science · NGSS Aligned</p>
+  </div>
+  <div class="teacher-tabs">
+    <button class="ttab active" onclick="switchTeacherTab('ts')">🌊 T-S Diagram</button>
+    <button class="ttab" onclick="switchTeacherTab('profiles')">📉 Ocean Profiles</button>
+    <button class="ttab" onclick="switchTeacherTab('distributions')">📊 Zone Stats</button>
+    <button class="ttab" onclick="switchTeacherTab('cce1temp')">🌡️ CCE1 Temperature</button>
+    <button class="ttab" onclick="switchTeacherTab('cce1sal')">🧂 CCE1 Salinity</button>
+  </div>
+
+  <!-- T-S Diagram Tab -->
+  <div id="ttab-ts" class="teacher-tab-content active">
+    <div class="teacher-chart-panel">
+      <div class="teacher-chart-title">Temperature–Salinity Diagram — Water Mass Identity</div>
+      <div class="teacher-chart-wrap" style="height:420px"><div id="tc-ts" style="width:100%;height:100%"></div></div>
+      <div class="chart-interp">
+        <strong>How to read this chart:</strong> Each dot is a real measurement from Argo float 4901639 in the Pacific Ocean.
+        The three distinct <em>clusters</em> are the three ocean zones — each has a unique temperature-salinity fingerprint called a <em>water mass</em>.
+        Notice how the Sunlight Zone has lower salinity and higher variability (surface mixing), while the Midnight Zone is cold, dense, and tightly packed.
+        The red star shows where the student's current slider settings would place Nori in the ocean — when it leaves its cluster, a statistically significant anomaly is detected.
+      </div>
+    </div>
+    <div class="teacher-lesson-panel">
+      <div class="lesson-card">
+        <span class="lesson-tag">NGSS MS-ESS2-6</span>
+        <h4>Water Mass Identification</h4>
+        <p style="font-size:.8rem;color:rgba(255,255,255,.65);line-height:1.55;margin-bottom:.5rem">Students use temperature-salinity data to identify distinct ocean water masses and understand how scientists classify ocean layers.</p>
+        <div class="lesson-section">Learning Objectives</div>
+        <ul class="lesson-list">
+          <li>Explain why different ocean depths have different T-S "fingerprints"</li>
+          <li>Identify when a measurement is anomalous by comparing to the cluster</li>
+          <li>Connect T-S fingerprints to climate change impacts</li>
+        </ul>
+        <div class="lesson-section">Discussion Questions</div>
+        <ul class="lesson-list">
+          <li>Why do the three zones form separate clusters instead of one big blob?</li>
+          <li>What happens to the sunlight zone cluster if the ocean warms by 2°C?</li>
+          <li>Why is the midnight zone cluster so much tighter than the others?</li>
+          <li>If you saw a measurement between zones, what might that tell you?</li>
+        </ul>
+        <div class="lesson-section">Activity Steps</div>
+        <ul class="lesson-list">
+          <li>Open the student app and show the three zone clusters</li>
+          <li>Have students predict what zone a reading of 8°C / 34.1 PSU belongs to</li>
+          <li>Drag the student star outside its cluster — watch the anomaly trigger</li>
+          <li>Compare to historical coral bleaching events (match T anomalies)</li>
+        </ul>
+        <span class="ngss-badge">MS-ESS2-6 — Ocean Circulation &amp; Climate</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profiles Tab -->
+  <div id="ttab-profiles" class="teacher-tab-content">
+    <div class="teacher-chart-panel">
+      <div class="teacher-chart-title">Vertical Ocean Profiles — Temperature &amp; Salinity with Depth</div>
+      <div class="teacher-chart-wrap" style="height:460px"><div id="tc-profiles" style="width:100%;height:100%"></div></div>
+      <div class="chart-interp">
+        <strong>How to read this chart:</strong> The x-axis is temperature (or salinity) and the y-axis is depth — so deeper ocean is at the <em>bottom</em> of the chart.
+        The solid line is the historical mean; the shaded band is ±1 standard deviation of real Argo readings.
+        The sharp drop in temperature around 200–1000m is the <em>thermocline</em> — the boundary between warm surface water and cold deep water.
+        In a warming climate, this thermocline shifts deeper and the shaded band widens, meaning more variation and less stability.
+      </div>
+    </div>
+    <div class="teacher-lesson-panel">
+      <div class="lesson-card">
+        <span class="lesson-tag">NGSS MS-ESS2-5</span>
+        <h4>The Thermocline: Ocean's Climate Barrier</h4>
+        <p style="font-size:.8rem;color:rgba(255,255,255,.65);line-height:1.55;margin-bottom:.5rem">Students analyze temperature and salinity profiles to understand how ocean stratification works and why the thermocline is critical to marine ecosystems.</p>
+        <div class="lesson-section">Learning Objectives</div>
+        <ul class="lesson-list">
+          <li>Identify the thermocline from a temperature-depth profile</li>
+          <li>Explain how density stratification keeps ocean layers separate</li>
+          <li>Predict how climate warming would shift the thermocline</li>
+        </ul>
+        <div class="lesson-section">Discussion Questions</div>
+        <ul class="lesson-list">
+          <li>At what depth does temperature drop most sharply? What is that called?</li>
+          <li>Why does salinity increase slightly with depth?</li>
+          <li>Why do deep-sea creatures struggle if the thermocline shifts?</li>
+          <li>How does the ±1σ band change between shallow and deep water? Why?</li>
+        </ul>
+        <div class="lesson-section">Activity Steps</div>
+        <ul class="lesson-list">
+          <li>Identify the thermocline on the temperature profile together as a class</li>
+          <li>Mark the three zone boundaries (200m and 1000m) on the chart</li>
+          <li>Discuss: what would happen to marine life if the thermocline moved 100m deeper?</li>
+          <li>Have students sketch what a "worst case" warming profile might look like</li>
+        </ul>
+        <span class="ngss-badge">MS-ESS2-5 — Earth's Systems &amp; Cycles</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Distributions Tab -->
+  <div id="ttab-distributions" class="teacher-tab-content">
+    <div class="teacher-chart-panel">
+      <div class="teacher-chart-title">Temperature Distributions by Zone — Statistical Safety Analysis</div>
+      <div class="teacher-chart-wrap" style="height:420px"><div id="tc-distributions" style="width:100%;height:100%"></div></div>
+      <div class="chart-interp">
+        <strong>How to read this chart:</strong> Each histogram shows the <em>frequency</em> of temperature readings in that zone across all 168 dive cycles.
+        The green shaded band is the "comfort zone" (mean ± tolerance) — conditions that keep marine life healthy.
+        The black vertical line is the historical mean baseline.
+        Notice how the midnight zone has a very <em>narrow</em> distribution (things almost never change there) while the sunlight zone is wider (much more variable).
+        A climate anomaly shows up as a shift: the histogram moves outside the green zone.
+      </div>
+    </div>
+    <div class="teacher-lesson-panel">
+      <div class="lesson-card">
+        <span class="lesson-tag">NGSS MS-ESS3-5</span>
+        <h4>Statistical Safety: Is It Normal?</h4>
+        <p style="font-size:.8rem;color:rgba(255,255,255,.65);line-height:1.55;margin-bottom:.5rem">Students use frequency distributions to understand what "normal" looks like in each ocean zone, and practice identifying when data falls outside the expected range.</p>
+        <div class="lesson-section">Learning Objectives</div>
+        <ul class="lesson-list">
+          <li>Read and interpret a frequency histogram</li>
+          <li>Understand what mean and standard deviation look like visually</li>
+          <li>Identify anomalous readings using the comfort zone band</li>
+          <li>Explain why the midnight zone has a narrower distribution</li>
+        </ul>
+        <div class="lesson-section">Discussion Questions</div>
+        <ul class="lesson-list">
+          <li>Which zone has the widest distribution? What causes that variability?</li>
+          <li>If climate change adds 2°C to the sunlight zone, what % of readings would be outside the green zone?</li>
+          <li>Why is a narrow midnight zone distribution a sign of stability AND fragility?</li>
+          <li>How many readings in the midnight zone are currently in the "warm" category?</li>
+        </ul>
+        <div class="lesson-section">Activity Steps</div>
+        <ul class="lesson-list">
+          <li>Estimate visually what % of readings fall in the green zone for each zone</li>
+          <li>Calculate: if the average shifted right by one tolerance width, what would change?</li>
+          <li>Compare sunlight vs midnight variance — calculate approximate standard deviations from the histograms</li>
+          <li>Connect to real data: have students look up what year had the most coral bleaching events</li>
+        </ul>
+        <span class="ngss-badge">MS-ESS3-5 — Human Impacts on Earth's Systems</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CCE1 Temperature Tab -->
+  <div id="ttab-cce1temp" class="teacher-tab-content">
+    <div class="teacher-chart-panel">
+      <div class="teacher-chart-title">CCE1 Mooring — Surface Temperature Time Series with Nori's Dives</div>
+      <div class="teacher-chart-wrap" style="height:420px"><div id="tc-cce1temp" style="width:100%;height:100%"></div></div>
+      <div class="chart-interp">
+        <strong>How to read this chart:</strong> The blue line is the continuous temperature record from the <strong>CCE1 mooring</strong> — a fixed sensor station anchored to the seafloor off Southern California, recording data 24/7.
+        The orange dots are Nori's surface measurements during each dive cycle. By overlaying them, students see how a <em>profiling float</em> (Nori) samples the same water as a fixed mooring (CCE1).
+        Seasonal cycles, El Niño warmings, and upwelling cold events are all visible. Where Nori's dots match the mooring line confirms the float is measuring accurately.
+      </div>
+    </div>
+    <div class="teacher-lesson-panel">
+      <div class="lesson-card">
+        <span class="lesson-tag">NGSS MS-ESS2-6</span>
+        <h4>Mooring vs. Float: Two Ways to Measure the Ocean</h4>
+        <p style="font-size:.8rem;color:rgba(255,255,255,.65);line-height:1.55;margin-bottom:.5rem">Students compare data from two different ocean observing instruments to understand why scientists use multiple data sources and how they validate measurements.</p>
+        <div class="lesson-section">Learning Objectives</div>
+        <ul class="lesson-list">
+          <li>Distinguish between a fixed mooring and a drifting profiling float</li>
+          <li>Identify seasonal temperature patterns from a time-series chart</li>
+          <li>Explain why having two independent data sources increases scientific confidence</li>
+        </ul>
+        <div class="lesson-section">Discussion Questions</div>
+        <ul class="lesson-list">
+          <li>What season do the warm peaks correspond to? What about the cold troughs?</li>
+          <li>Do Nori's orange dots closely match the CCE1 blue line? What does that tell us?</li>
+          <li>Why can't scientists just use moorings everywhere instead of Argo floats?</li>
+          <li>What events could cause Nori's dots to be much hotter or cooler than the mooring line?</li>
+        </ul>
+        <div class="lesson-section">Activity Steps</div>
+        <ul class="lesson-list">
+          <li>Identify at least 2 warm peaks and 2 cold troughs on the mooring data</li>
+          <li>Mark the months that correspond to those peaks using the x-axis dates</li>
+          <li>Find a Nori dive (orange dot) that is far from the mooring line — discuss why</li>
+          <li>Discuss: what would a 2°C shift upward mean for a species that spawns only when T &lt; 14°C?</li>
+        </ul>
+        <span class="ngss-badge">MS-ESS2-6 — Ocean Circulation &amp; Climate</span>
+      </div>
+      <div class="lesson-card" style="margin-top:.5rem">
+        <span class="lesson-tag">NGSS MS-PS1-5</span>
+        <h4>Ocean as Heat Reservoir</h4>
+        <div class="lesson-section">Key Concept</div>
+        <p style="font-size:.8rem;color:rgba(255,255,255,.7);line-height:1.55">Water has a very high <em>specific heat</em> — it takes a lot of energy to change its temperature. That's why ocean temperature changes happen slowly compared to air temperature changes. This is why the ocean is our planet's main climate buffer, absorbing 90% of excess atmospheric heat.</p>
+        <span class="ngss-badge">MS-PS1-5 — Properties of Matter</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CCE1 Salinity Tab -->
+  <div id="ttab-cce1sal" class="teacher-tab-content">
+    <div class="teacher-chart-panel">
+      <div class="teacher-chart-title">CCE1 Mooring — Surface Salinity Time Series with Nori's Dives</div>
+      <div class="teacher-chart-wrap" style="height:420px"><div id="tc-cce1sal" style="width:100%;height:100%"></div></div>
+      <div class="chart-interp">
+        <strong>How to read this chart:</strong> The teal line is continuous salinity from the CCE1 mooring; the green dots are Nori's surface salinity measurements per dive cycle.
+        Salinity changes are driven by <em>evaporation</em> (increases salinity) and <em>precipitation or freshwater runoff</em> (decreases salinity).
+        In a warming climate, evaporation rates increase, making salty areas saltier and fresh areas fresher — a process called <em>halocline amplification</em>.
+        Sudden drops in salinity near the California coast often indicate cold, fresh upwelling water reaching the surface.
+      </div>
+    </div>
+    <div class="teacher-lesson-panel">
+      <div class="lesson-card">
+        <span class="lesson-tag">NGSS MS-ESS2-5</span>
+        <h4>Salinity &amp; the Water Cycle</h4>
+        <p style="font-size:.8rem;color:rgba(255,255,255,.65);line-height:1.55;margin-bottom:.5rem">Students explore how salinity varies over time and what drives those changes, connecting ocean salinity to the global water cycle and climate change.</p>
+        <div class="lesson-section">Learning Objectives</div>
+        <ul class="lesson-list">
+          <li>Identify what causes salinity to increase or decrease at the surface</li>
+          <li>Explain how salinity and temperature together determine water density</li>
+          <li>Connect salinity changes to climate-driven shifts in the water cycle</li>
+        </ul>
+        <div class="lesson-section">Discussion Questions</div>
+        <ul class="lesson-list">
+          <li>When does salinity tend to be highest — summer or winter? Why?</li>
+          <li>What could cause the sharp drops in salinity you see in the data?</li>
+          <li>If the Pacific warms and evaporation increases, how would you expect this chart to shift?</li>
+          <li>Why does salinity matter to marine life? Give two specific examples.</li>
+        </ul>
+        <div class="lesson-section">Activity Steps</div>
+        <ul class="lesson-list">
+          <li>Compare peaks in the temperature chart vs. peaks in the salinity chart — are they in sync?</li>
+          <li>Find the largest salinity drop — what might have caused it (El Niño? Upwelling? Storm runoff?)?</li>
+          <li>Calculate the range (max − min) of salinity over the recording period</li>
+          <li>Discuss: why would a 0.5 PSU change in salinity stress a coral polyp?</li>
+        </ul>
+        <span class="ngss-badge">MS-ESS2-5 — Earth's Systems &amp; Cycles</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ BOTTOM NAV ═════════════════════════════════════════════════════ -->
 <nav id="bottom-nav">
   <div class="nav-item" id="nav-ocean" onclick="goTo('map')">
@@ -893,20 +1333,22 @@ h2{font-size:1.45rem;font-weight:900}h3{font-size:1.1rem;font-weight:800}
     <div class="nav-lbl">Edit</div>
     <div class="nav-pip"></div>
   </div>
+  <div class="nav-item" id="nav-teacher" onclick="goTo('teacher')">
+    <div class="nav-icon">🎓</div>
+    <div class="nav-lbl">Teach</div>
+    <div class="nav-pip"></div>
+  </div>
 </nav>
 
 <script>
 // ── Injected data ─────────────────────────────────────────────────────────────
-const ZONES  = __ZONES__;
-const MOODS  = __MOODS__;
-const FACTS  = __FACTS__;
-const HIST   = __HIST__;
-const STATS  = __STATS__;
+const ZONES    = __ZONES__;
+const MOODS    = __MOODS__;
+const FACTS    = __FACTS__;
+const ZONE_EDU = __ZONE_EDU__;
+const STATS    = __STATS__;
 const TRACK    = __TRACK__;
-const SAL_HIST = __SAL_HIST__;
-const SAL_PROF = __SAL_PROF__;
-const TS_DATA  = __TS_DATA__;
-const ZORDER = ['sunlight','twilight','midnight'];
+const ZORDER   = ['sunlight','twilight','midnight'];
 
 // ── Game state ────────────────────────────────────────────────────────────────
 let G = {
@@ -1049,7 +1491,7 @@ function finishCreator(){
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────────
-const NAV_MAP={map:'nav-ocean',world:'nav-world',pet:'nav-buddy',creator:'nav-edit'};
+const NAV_MAP={map:'nav-ocean',world:'nav-world',pet:'nav-buddy',creator:'nav-edit',teacher:'nav-teacher'};
 function showNav(show){
   const nav=document.getElementById('bottom-nav');
   if(show) nav.classList.add('show'); else nav.classList.remove('show');
@@ -1064,6 +1506,7 @@ function goTo(scr){
   if(scr==='zone')    renderZone();
   if(scr==='pet')     renderPet();
   if(scr==='world')   initWorldMap();
+  if(scr==='teacher') initTeacherScreen();
   if(scr==='creator'){ updatePreview(); syncCreatorUI(); }
   window.scrollTo(0,0);
 }
@@ -1100,7 +1543,6 @@ function enterZone(zk){ G.cur=zk; goTo('zone'); }
 function startAdventure(){ G.cur='sunlight'; goTo('zone'); }
 
 // ── Zone Explorer ─────────────────────────────────────────────────────────────
-let mChart=null,hChart=null,salProfChart=null,tsChart=null;
 const ZONE_GRADS={sunlight:'linear-gradient(135deg,#ff6b35,#ff9f1c)',twilight:'linear-gradient(135deg,#6a0dad,#c77dff)',midnight:'linear-gradient(135deg,#0077b6,#4cc9f0)'};
 function renderZone(){
   const zk=G.cur,z=ZONES[zk],gz=G.zones[zk],ac=z.accent;
@@ -1125,6 +1567,17 @@ function renderZone(){
   document.getElementById('zi-res').textContent=z.residents;
   document.getElementById('buddy-zone').innerHTML=buildChar(G.buddy.color,G.buddy.eyes,G.buddy.acc,76);
   document.getElementById('zone-fact').textContent=FACTS[zk];
+  // Populate educational right column
+  const edu=ZONE_EDU[zk]||{};
+  document.getElementById('zone-science-list').innerHTML=
+    (edu.science_facts||[]).map(f=>`<li>${f}</li>`).join('');
+  document.getElementById('zone-key-numbers').innerHTML=
+    (edu.key_numbers||[]).map(([l,v])=>`<div class="edu-num-item"><div class="edu-num-label">${l}</div><div class="edu-num-value">${v}</div></div>`).join('');
+  document.getElementById('zone-tipping-text').textContent=edu.tipping_text||'';
+  const [aIcon,aName,aTxt]=edu.animal_spotlight||['','',''];
+  document.getElementById('zone-animal-icon').textContent=aIcon;
+  document.getElementById('zone-animal-name').textContent=aName;
+  document.getElementById('zone-animal-text').textContent=aTxt;
 
   const ts=document.getElementById('tslider');
   ts.min=z.slider_min; ts.max=z.slider_max; ts.step=0.1; ts.value=gz.temp;
@@ -1143,7 +1596,6 @@ function renderZone(){
     dn.className='btn btn-success';
   }
   refreshZone();
-  buildDeepDiveCharts(zk);
 }
 function refreshZone(){
   const zk=G.cur,z=ZONES[zk];
@@ -1184,13 +1636,6 @@ function refreshZone(){
   document.getElementById('sv').textContent=sal.toFixed(2);
   document.getElementById('smsg').textContent=sm;
   document.getElementById('smsg').style.color=sc;
-  const hist=HIST[zk]||[];
-  if(hist.length){
-    const below=hist.filter(t=>t<temp).length;
-    document.getElementById('pct-n').textContent=Math.round(below/hist.length*100)+'%';
-  }
-  buildCharts(zk,temp);
-  updateTSPoint(temp,sal);
 }
 function onTC(){ refreshZone(); pushLiveState(); }
 function onSC(){ refreshZone(); pushLiveState(); }
@@ -1207,121 +1652,6 @@ function pushLiveState(){
       body:JSON.stringify({zone:zk,temperature:temp,salinity:sal,depth:G.zones[zk].depth||50})
     }).catch(()=>{});
   },180);
-}
-
-function buildCharts(zk,temp){
-  const z=ZONES[zk],ac=z.accent;
-  const baseOpts={responsive:true,maintainAspectRatio:false,
-    plugins:{legend:{display:false}},
-    scales:{x:{ticks:{color:'rgba(255,255,255,.45)',font:{size:9}},grid:{color:'rgba(255,255,255,.04)'}},
-            y:{ticks:{color:'rgba(255,255,255,.45)',font:{size:9}},grid:{color:'rgba(255,255,255,.04)'}}}};
-  if(mChart) mChart.destroy();
-  mChart=new Chart(document.getElementById('mood-chart').getContext('2d'),{type:'bar',
-    data:{labels:['😊 Happy','🥵 Too Warm','🥶 Too Cold'],
-          datasets:[{data:[z.pct_happy,z.pct_warm,z.pct_cold],
-            backgroundColor:['rgba(0,245,195,.7)','rgba(255,107,107,.7)','rgba(116,185,255,.7)'],
-            borderRadius:8,borderSkipped:false}]},
-    options:{...baseOpts,indexAxis:'y',
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.raw.toFixed(1)}%`}}},
-      scales:{x:{...baseOpts.scales.x,max:100},y:{...baseOpts.scales.y,grid:{display:false}}}}
-  });
-  const hist=HIST[zk]||[];
-  if(hChart) hChart.destroy();
-  if(hist.length){
-    const lo=z.slider_min,hi=z.slider_max,bins=20,step=(hi-lo)/bins;
-    const counts=new Array(bins).fill(0),labels=[];
-    for(let i=0;i<bins;i++) labels.push((lo+i*step).toFixed(1));
-    hist.forEach(t=>{ const b=Math.min(bins-1,Math.max(0,Math.floor((t-lo)/step))); counts[b]++; });
-    hChart=new Chart(document.getElementById('hist-chart').getContext('2d'),{type:'bar',
-      data:{labels,datasets:[
-        {label:'History',data:counts,backgroundColor:`${ac}44`,borderColor:`${ac}88`,borderWidth:1,borderRadius:4},
-        {label:'You',data:counts.map((_,i)=>{ const bt=lo+i*step; return(temp>=bt&&temp<bt+step)?Math.max(...counts)*1.1:null; }),
-         backgroundColor:'#ff6b6b',borderRadius:4,borderSkipped:false}]},
-      options:{...baseOpts,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`${ctx.raw} readings`}}}}
-    });
-  }
-}
-// ── Deep Dive Charts ──────────────────────────────────────────────────────────
-function buildDeepDiveCharts(zk){
-  const z=ZONES[zk];
-  const tickStyle={color:'rgba(255,255,255,.45)',font:{size:9}};
-  const gridStyle={color:'rgba(255,255,255,.05)'};
-  const baseOpts={responsive:true,maintainAspectRatio:false,
-    plugins:{legend:{display:false}},
-    scales:{x:{ticks:tickStyle,grid:gridStyle},y:{ticks:tickStyle,grid:gridStyle}}};
-
-  // Salinity depth profile (horizontal line chart with ±1σ band)
-  if(salProfChart){ salProfChart.destroy(); salProfChart=null; }
-  const prof=SAL_PROF||[];
-  if(prof.length){
-    salProfChart=new Chart(document.getElementById('sal-prof-chart').getContext('2d'),{type:'line',
-      data:{labels:prof.map(p=>p.d),datasets:[
-        {label:'Mean',data:prof.map(p=>p.sm),fill:false,borderColor:'#00d4ff',borderWidth:2.5,pointRadius:0,tension:.3},
-        {label:'+1σ',data:prof.map(p=>+(p.sm+p.ss).toFixed(3)),fill:'+1',backgroundColor:'rgba(0,212,255,.1)',
-         borderColor:'rgba(0,212,255,.22)',borderDash:[3,3],borderWidth:1.5,pointRadius:0,tension:.3},
-        {label:'-1σ',data:prof.map(p=>+(p.sm-p.ss).toFixed(3)),fill:false,
-         borderColor:'rgba(0,212,255,.22)',borderDash:[3,3],borderWidth:1.5,pointRadius:0,tension:.3}
-      ]},
-      options:{...baseOpts,indexAxis:'y',
-        plugins:{legend:{display:false},tooltip:{mode:'index',intersect:false,
-          callbacks:{title:c=>`Depth: ${c[0].label} dbar`,label:c=>`${c.dataset.label}: ${c.parsed.x.toFixed(3)} PSU`}}},
-        scales:{
-          x:{...baseOpts.scales.x,title:{display:true,text:'Salinity (PSU)',color:'rgba(255,255,255,.35)',font:{size:9}}},
-          y:{...baseOpts.scales.y,title:{display:true,text:'Depth (dbar)',color:'rgba(255,255,255,.35)',font:{size:9}},
-             ticks:{...tickStyle,maxTicksLimit:10}}
-        }
-      }
-    });
-  }
-
-  // T-S Diagram (scatter)
-  if(tsChart){ tsChart.destroy(); tsChart=null; }
-  const zColors={sunlight:'rgba(255,159,28,.45)',twilight:'rgba(199,125,255,.45)',midnight:'rgba(76,201,240,.45)'};
-  const tsDsets=ZORDER.map(zn=>({
-    label:ZONES[zn].name,data:TS_DATA[zn]||[],
-    backgroundColor:zColors[zn],pointRadius:2.5,pointHoverRadius:5,borderWidth:0
-  }));
-  tsDsets.push({
-    label:'You ★',data:[{x:G.zones[zk].sal,y:G.zones[zk].temp}],
-    backgroundColor:'#ff6b6b',pointRadius:12,pointHoverRadius:14,
-    pointStyle:'star',borderWidth:0
-  });
-  tsChart=new Chart(document.getElementById('ts-chart').getContext('2d'),{type:'scatter',
-    data:{datasets:tsDsets},
-    options:{...baseOpts,
-      plugins:{
-        legend:{display:true,labels:{color:'rgba(255,255,255,.7)',font:{size:9},boxWidth:10,padding:8}},
-        tooltip:{callbacks:{label:c=>`${c.dataset.label}: T=${c.parsed.y.toFixed(2)}°C, S=${c.parsed.x.toFixed(3)}`}}
-      },
-      scales:{
-        x:{...baseOpts.scales.x,title:{display:true,text:'Salinity (PSU)',color:'rgba(255,255,255,.35)',font:{size:9}}},
-        y:{...baseOpts.scales.y,title:{display:true,text:'Temperature (°C)',color:'rgba(255,255,255,.35)',font:{size:9}}}
-      }
-    }
-  });
-
-  // Zone comparison table
-  const rows=ZORDER.map(zn=>{
-    const zd=ZONES[zn];
-    const hist=HIST[zn]||[],sh=SAL_HIST[zn]||[];
-    const tMean=hist.length?(hist.reduce((a,b)=>a+b,0)/hist.length).toFixed(2):zd.baseline.toFixed(2);
-    const sMean=sh.length?(sh.reduce((a,b)=>a+b,0)/sh.length).toFixed(3):zd.sal_baseline.toFixed(3);
-    const tag=`<span class="ztag" style="background:${zd.accent}22;color:${zd.accent};border:1px solid ${zd.accent}55">${zd.emoji} ${zd.name}</span>`;
-    const hi=zn===zk?' style="background:rgba(255,255,255,.05)"':'';
-    return `<tr${hi}><td>${tag}</td><td style="color:rgba(255,255,255,.5)">${zd.depth}</td>`+
-      `<td>${tMean}°C <small style="color:rgba(255,255,255,.35)">/ ${zd.baseline}°C base</small></td>`+
-      `<td>${sMean} PSU <small style="color:rgba(255,255,255,.35)">/ ${zd.sal_baseline} base</small></td>`+
-      `<td><span style="color:#00f5c3;font-weight:800">${zd.pct_happy}%</span></td></tr>`;
-  }).join('');
-  document.getElementById('zone-table-wrap').innerHTML=`<table class="stats-table">
-    <thead><tr><th>Zone</th><th>Depth</th><th>Avg Temp</th><th>Avg Salinity</th><th>😊 Happy %</th></tr></thead>
-    <tbody>${rows}</tbody></table>`;
-}
-function updateTSPoint(temp,sal){
-  if(!tsChart) return;
-  const ds=tsChart.data.datasets;
-  ds[ds.length-1].data=[{x:sal,y:temp}];
-  tsChart.update('none');
 }
 
 function navUp(){ const i=ZORDER.indexOf(G.cur); if(i>0){ G.cur=ZORDER[i-1]; renderZone(); } }
@@ -1533,6 +1863,228 @@ function spawnSparkles(){
   }
 }
 
+// ── Teacher Screen ────────────────────────────────────────────────────────────
+const _teacherLoaded = {ts:false, profiles:false, distributions:false, cce1:false};
+let   _cce1Data      = null;
+const _PLOTLY_LAYOUT = {
+  paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(255,255,255,.04)',
+  font:{family:'Nunito, sans-serif', size:11, color:'rgba(255,255,255,.75)'},
+  margin:{t:30,b:60,l:60,r:20},
+  legend:{bgcolor:'rgba(0,0,0,.3)', bordercolor:'rgba(255,255,255,.15)', borderwidth:1},
+};
+const _PLOTLY_CFG = {responsive:true, displayModeBar:false};
+
+function switchTeacherTab(name){
+  document.querySelectorAll('.teacher-tab-content').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.ttab').forEach(t=>t.classList.remove('active'));
+  const el = document.getElementById('ttab-'+name);
+  if(el) el.classList.add('active');
+  event.target.classList.add('active');
+  loadTeacherTab(name);
+}
+
+function initTeacherScreen(){
+  if(!_teacherLoaded.ts) loadTeacherTab('ts');
+}
+
+async function loadTeacherTab(name){
+  if(name==='ts'       && !_teacherLoaded.ts)            { _teacherLoaded.ts=true;            await _loadTS(); }
+  if(name==='profiles' && !_teacherLoaded.profiles)       { _teacherLoaded.profiles=true;       await _loadProfiles(); }
+  if(name==='distributions' && !_teacherLoaded.distributions){ _teacherLoaded.distributions=true; await _loadDistributions(); }
+  if((name==='cce1temp'||name==='cce1sal') && !_teacherLoaded.cce1){ _teacherLoaded.cce1=true; await _loadCCE1(); }
+  if(name==='cce1temp' && _cce1Data) _drawCCE1Temp();
+  if(name==='cce1sal'  && _cce1Data) _drawCCE1Sal();
+}
+
+async function _loadTS(){
+  const el=document.getElementById('tc-ts');
+  el.innerHTML='<div class="teacher-loading"><span class="spin">🔄</span>Loading T-S data…</div>';
+  try{
+    const d=await fetch('/api/teacher/ts').then(r=>r.json());
+    const zColors={sunlight:'rgba(255,159,28,.45)',twilight:'rgba(199,125,255,.45)',midnight:'rgba(76,201,240,.45)'};
+    const zNames ={sunlight:'🌞 Sunlight',twilight:'🌅 Twilight',midnight:'🌑 Midnight'};
+    const traces=ZORDER.map(zk=>({
+      type:'scatter', mode:'markers', name:zNames[zk],
+      x:(d.zones[zk]||[]).map(p=>p.x),
+      y:(d.zones[zk]||[]).map(p=>p.y),
+      marker:{color:zColors[zk],size:3,opacity:.55},
+      hovertemplate:'S: %{x:.3f} PSU<br>T: %{y:.2f}°C<extra>'+zNames[zk]+'</extra>',
+    }));
+    if(d.track&&d.track.length){
+      traces.push({type:'scatter',mode:'markers',name:'🔴 Nori Cycles',
+        x:d.track.map(p=>p.x), y:d.track.map(p=>p.y),
+        text:d.track.map(p=>`Cycle ${p.cycle} — ${p.date}`),
+        marker:{color:'#ff6b6b',size:10,symbol:'star',line:{color:'white',width:1.5}},
+        hovertemplate:'%{text}<br>S: %{x:.3f} PSU<br>T: %{y:.2f}°C<extra>Nori</extra>',
+      });
+    }
+    el.innerHTML='';
+    Plotly.newPlot(el, traces, {
+      ...JSON.parse(JSON.stringify(_PLOTLY_LAYOUT)),
+      xaxis:{title:{text:'Salinity (PSU)',font:{size:12}},gridcolor:'rgba(255,255,255,.07)',zerolinecolor:'rgba(255,255,255,.1)'},
+      yaxis:{title:{text:'Temperature (°C)',font:{size:12}},gridcolor:'rgba(255,255,255,.07)',zerolinecolor:'rgba(255,255,255,.1)'},
+    }, _PLOTLY_CFG);
+  }catch(e){ el.innerHTML=`<div class="teacher-loading">⚠️ Failed to load T-S data: ${e.message}</div>`; }
+}
+
+async function _loadProfiles(){
+  const el=document.getElementById('tc-profiles');
+  el.innerHTML='<div class="teacher-loading"><span class="spin">🔄</span>Loading profiles…</div>';
+  try{
+    const d=await fetch('/api/teacher/profiles').then(r=>r.json());
+    const depths=d.map(p=>p.d);
+    const traces=[
+      {type:'scatter',mode:'lines',name:'±1σ Temp',
+       x:[...d.map(p=>p.tm+p.ts),...d.map(p=>p.tm-p.ts).reverse()],
+       y:[...depths,...depths.slice().reverse()],
+       fill:'toself',fillcolor:'rgba(52,152,219,.15)',line:{color:'rgba(0,0,0,0)'},showlegend:false,hoverinfo:'skip'},
+      {type:'scatter',mode:'lines',name:'Mean Temp (°C)',
+       x:d.map(p=>p.tm), y:depths,
+       line:{color:'#4cc9f0',width:2.5},
+       hovertemplate:'Depth: %{y} dbar<br>Temp: %{x:.2f}°C<extra></extra>'},
+    ];
+    if(d[0]&&d[0].sm!=null){
+      traces.push(
+        {type:'scatter',mode:'lines',name:'±1σ Sal',
+         x:[...d.filter(p=>p.sm!=null).map(p=>p.sm+(p.ss||0)),...d.filter(p=>p.sm!=null).map(p=>p.sm-(p.ss||0)).reverse()],
+         y:[...d.filter(p=>p.sm!=null).map(p=>p.d),...d.filter(p=>p.sm!=null).map(p=>p.d).reverse()],
+         fill:'toself',fillcolor:'rgba(22,160,133,.15)',line:{color:'rgba(0,0,0,0)'},showlegend:false,hoverinfo:'skip',xaxis:'x2'},
+        {type:'scatter',mode:'lines',name:'Mean Salinity (PSU)',
+         x:d.filter(p=>p.sm!=null).map(p=>p.sm),
+         y:d.filter(p=>p.sm!=null).map(p=>p.d),
+         line:{color:'#00f5c3',width:2.5},xaxis:'x2',
+         hovertemplate:'Depth: %{y} dbar<br>Sal: %{x:.3f} PSU<extra></extra>'},
+      );
+    }
+    el.innerHTML='';
+    Plotly.newPlot(el, traces, {
+      ...JSON.parse(JSON.stringify(_PLOTLY_LAYOUT)),
+      grid:{rows:1,columns:d[0]&&d[0].sm!=null?2:1,pattern:'independent'},
+      yaxis:{autorange:'reversed',title:{text:'Depth (dbar)',font:{size:12}},gridcolor:'rgba(255,255,255,.07)'},
+      xaxis:{title:{text:'Temperature (°C)',font:{size:12}},gridcolor:'rgba(255,255,255,.07)'},
+      xaxis2:{title:{text:'Salinity (PSU)',font:{size:12}},gridcolor:'rgba(255,255,255,.07)'},
+      shapes:[
+        {type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:0,y1:200,fillcolor:'rgba(255,159,28,.06)',line:{width:0},layer:'below'},
+        {type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:200,y1:1000,fillcolor:'rgba(199,125,255,.06)',line:{width:0},layer:'below'},
+        {type:'rect',xref:'paper',x0:0,x1:1,yref:'y',y0:1000,y1:2200,fillcolor:'rgba(76,201,240,.06)',line:{width:0},layer:'below'},
+      ],
+    }, _PLOTLY_CFG);
+  }catch(e){ el.innerHTML=`<div class="teacher-loading">⚠️ ${e.message}</div>`; }
+}
+
+async function _loadDistributions(){
+  const el=document.getElementById('tc-distributions');
+  el.innerHTML='<div class="teacher-loading"><span class="spin">🔄</span>Loading distributions…</div>';
+  try{
+    const d=await fetch('/api/teacher/distributions').then(r=>r.json());
+    const zColors={sunlight:'rgba(255,159,28,.7)',twilight:'rgba(199,125,255,.7)',midnight:'rgba(76,201,240,.7)'};
+    const zNames={sunlight:'🌞 Sunlight',twilight:'🌅 Twilight',midnight:'🌑 Midnight'};
+    const traces=[];
+    const shapes=[];
+    let col=1;
+    for(const zk of ZORDER){
+      const z=d[zk]; if(!z) continue;
+      const xref=`x${col>1?col:''}`, yref=`y${col>1?col:''}`;
+      traces.push({type:'bar',name:zNames[zk],x:z.labels,y:z.counts,
+        marker:{color:zColors[zk],line:{color:'rgba(255,255,255,.1)',width:.5}},
+        xaxis:`x${col>1?col:''}`, yaxis:`y${col>1?col:''}`,
+        hovertemplate:'T: %{x:.1f}°C<br>Count: %{y}<extra>'+zNames[zk]+'</extra>'});
+      shapes.push({type:'rect',xref,yref:'paper',x0:z.baseline-z.tolerance,x1:z.baseline+z.tolerance,
+        y0:0,y1:1,fillcolor:'rgba(46,204,113,.15)',line:{color:'rgba(46,204,113,.6)',width:1.5,dash:'dot'},layer:'above'});
+      shapes.push({type:'line',xref,yref:'paper',x0:z.baseline,x1:z.baseline,y0:0,y1:1,
+        line:{color:'rgba(255,255,255,.8)',width:2}});
+      col++;
+    }
+    el.innerHTML='';
+    Plotly.newPlot(el, traces, {
+      ...JSON.parse(JSON.stringify(_PLOTLY_LAYOUT)),
+      grid:{rows:1,columns:ZORDER.length,pattern:'independent'},
+      shapes,
+      annotations:ZORDER.map((zk,i)=>({xref:`x${i>0?i+1:''}`,yref:'paper',x:d[zk]&&d[zk].baseline,y:1.04,
+        text:zNames[zk],showarrow:false,font:{size:11,color:'rgba(255,255,255,.7)'}})),
+      xaxis:{title:{text:'Temperature (°C)',font:{size:11}},gridcolor:'rgba(255,255,255,.05)'},
+      xaxis2:{title:{text:'Temperature (°C)',font:{size:11}},gridcolor:'rgba(255,255,255,.05)'},
+      xaxis3:{title:{text:'Temperature (°C)',font:{size:11}},gridcolor:'rgba(255,255,255,.05)'},
+      yaxis:{title:{text:'Count',font:{size:11}},gridcolor:'rgba(255,255,255,.05)'},
+      bargap:0.06,
+    }, _PLOTLY_CFG);
+  }catch(e){ el.innerHTML=`<div class="teacher-loading">⚠️ ${e.message}</div>`; }
+}
+
+async function _loadCCE1(){
+  document.getElementById('tc-cce1temp').innerHTML='<div class="teacher-loading"><span class="spin">🔄</span>Loading CCE1 mooring data… (first load may take a moment)</div>';
+  document.getElementById('tc-cce1sal').innerHTML= '<div class="teacher-loading"><span class="spin">🔄</span>Loading CCE1 mooring data…</div>';
+  try{
+    _cce1Data=await fetch('/api/teacher/cce1').then(r=>r.json());
+    if(_cce1Data.cce1&&_cce1Data.cce1.error){
+      const msg=`<div class="teacher-loading">⚠️ CCE1 data unavailable: ${_cce1Data.cce1.error}<br><small style="opacity:.6">CCE1 mooring data requires a network connection to NOAA THREDDS on first run.</small></div>`;
+      document.getElementById('tc-cce1temp').innerHTML=msg;
+      document.getElementById('tc-cce1sal').innerHTML=msg;
+    }else{
+      _drawCCE1Temp();
+      _drawCCE1Sal();
+    }
+  }catch(e){
+    const msg=`<div class="teacher-loading">⚠️ ${e.message}</div>`;
+    document.getElementById('tc-cce1temp').innerHTML=msg;
+    document.getElementById('tc-cce1sal').innerHTML=msg;
+  }
+}
+
+function _drawCCE1Temp(){
+  if(!_cce1Data) return;
+  const el=document.getElementById('tc-cce1temp');
+  const {cce1,nori}=_cce1Data;
+  const traces=[];
+  if(cce1.time&&cce1.time.length){
+    traces.push({type:'scatter',mode:'lines',name:'CCE1 Mooring',
+      x:cce1.time, y:cce1.temp,
+      line:{color:'rgba(76,201,240,.8)',width:1.5},
+      hovertemplate:'%{x}<br>T: %{y:.2f}°C<extra>CCE1 Mooring</extra>'});
+  }
+  if(nori&&nori.length){
+    traces.push({type:'scatter',mode:'markers',name:'Nori Dive (surface mean)',
+      x:nori.map(p=>p.date), y:nori.map(p=>p.temp),
+      text:nori.map(p=>`Cycle ${p.cycle}`),
+      marker:{color:'#ff9f1c',size:8,symbol:'circle',line:{color:'white',width:1.5}},
+      hovertemplate:'%{text} — %{x}<br>T: %{y:.2f}°C<extra>Nori Float</extra>'});
+  }
+  el.innerHTML='';
+  Plotly.newPlot(el, traces, {
+    ...JSON.parse(JSON.stringify(_PLOTLY_LAYOUT)),
+    title:{text:'',font:{size:12}},
+    xaxis:{title:{text:'Date',font:{size:12}},gridcolor:'rgba(255,255,255,.07)'},
+    yaxis:{title:{text:'Temperature (°C)',font:{size:12}},gridcolor:'rgba(255,255,255,.07)'},
+  }, _PLOTLY_CFG);
+}
+
+function _drawCCE1Sal(){
+  if(!_cce1Data) return;
+  const el=document.getElementById('tc-cce1sal');
+  const {cce1,nori}=_cce1Data;
+  const traces=[];
+  if(cce1.time&&cce1.sal&&cce1.sal.some(v=>v!=null)){
+    traces.push({type:'scatter',mode:'lines',name:'CCE1 Mooring',
+      x:cce1.time, y:cce1.sal,
+      line:{color:'rgba(0,245,195,.8)',width:1.5},
+      hovertemplate:'%{x}<br>S: %{y:.3f} PSU<extra>CCE1 Mooring</extra>'});
+  }
+  const noriSal=nori&&nori.filter(p=>p.sal!=null);
+  if(noriSal&&noriSal.length){
+    traces.push({type:'scatter',mode:'markers',name:'Nori Dive (surface mean)',
+      x:noriSal.map(p=>p.date), y:noriSal.map(p=>p.sal),
+      text:noriSal.map(p=>`Cycle ${p.cycle}`),
+      marker:{color:'#ffd60a',size:8,symbol:'circle',line:{color:'white',width:1.5}},
+      hovertemplate:'%{text} — %{x}<br>S: %{y:.3f} PSU<extra>Nori Float</extra>'});
+  }
+  el.innerHTML='';
+  Plotly.newPlot(el, traces, {
+    ...JSON.parse(JSON.stringify(_PLOTLY_LAYOUT)),
+    xaxis:{title:{text:'Date',font:{size:12}},gridcolor:'rgba(255,255,255,.07)'},
+    yaxis:{title:{text:'Salinity (PSU)',font:{size:12}},gridcolor:'rgba(255,255,255,.07)'},
+  }, _PLOTLY_CFG);
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded',()=>{
   loadG();
@@ -1551,16 +2103,6 @@ document.addEventListener('DOMContentLoaded',()=>{
   }
 });
 </script>
-<!-- Teacher Mode pill (always visible, top-right) -->
-<a href="/teacher" target="_blank" style="
-  position:fixed;top:14px;right:14px;z-index:9999;
-  background:rgba(255,255,255,.11);backdrop-filter:blur(12px);
-  border:1.5px solid rgba(255,255,255,.22);border-radius:24px;
-  padding:.38rem 1rem;font-size:.75rem;font-weight:800;
-  color:rgba(255,255,255,.75);text-decoration:none;letter-spacing:.04em;
-  transition:background .2s,color .2s;white-space:nowrap;">
-  📊 Teacher Dashboard →
-</a>
 </body>
 </html>"""
 
